@@ -16,6 +16,7 @@ const PASSWORD_FIELD_NAMES = new Set([
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let realtimeChannel: ReturnType<NonNullable<ReturnType<typeof getSupabase>>["channel"]> | null = null;
+let lastPushCompletedAt = 0;
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "error" | "offline" | "needs_setup";
 
@@ -322,7 +323,8 @@ async function pullPublicRosterImpl(): Promise<boolean> {
  */
 export async function pullCloudStores(timeoutMs = DEFAULT_CLOUD_TIMEOUT_MS): Promise<boolean> {
   return withTimeout(pullCloudStoresImpl(), timeoutMs, () => {
-    if (syncStatus === "syncing") setSyncStatus("error");
+    // Only set error if we haven't recently pushed successfully
+    if (syncStatus === "syncing" && Date.now() - lastPushCompletedAt > 3000) setSyncStatus("error");
     return false;
   });
 }
@@ -404,7 +406,7 @@ async function pullCloudStoresImpl(): Promise<boolean> {
 /** Push local institutional data to Supabase (debounced after writes). */
 export async function pushCloudStores(timeoutMs = DEFAULT_CLOUD_TIMEOUT_MS): Promise<boolean> {
   return withTimeout(pushCloudStoresImpl(), timeoutMs, () => {
-    if (syncStatus === "syncing") setSyncStatus("error");
+    if (syncStatus === "syncing" && Date.now() - lastPushCompletedAt > 3000) setSyncStatus("error");
     return false;
   });
 }
@@ -453,6 +455,7 @@ async function pushCloudStoresImpl(): Promise<boolean> {
     }
     writeSyncMeta(metaPatch);
 
+    lastPushCompletedAt = Date.now();
     setSyncStatus("synced");
     return true;
   } catch {
@@ -500,6 +503,8 @@ export function subscribeCloudRealtime(onRemoteChange?: () => void): () => void 
       "postgres_changes",
       { event: "*", schema: "public", table: "app_sync" },
       () => {
+        // Skip pull if we just pushed — avoids push/pull race causing false "Sync issue"
+        if (Date.now() - lastPushCompletedAt < 3000) return;
         void pullCloudStores().then(() => onRemoteChange?.());
       }
     )
