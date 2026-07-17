@@ -1,0 +1,405 @@
+import { getSupabase } from "./supabaseClient";
+import { isCloudEnabled } from "./config";
+
+export const CLOUD_USERS_KEY = "wawuhub_users";
+export const CLOUD_DATA_KEY = "wawuhub_data";
+export const CLOUD_SETTINGS_KEY = "wawuhub_settings";
+const SYNC_META_KEY = "wawuhub_sync_meta";
+
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let realtimeChannel: ReturnType<NonNullable<ReturnType<typeof getSupabase>>["channel"]> | null = null;
+
+export type SyncStatus = "idle" | "syncing" | "synced" | "error" | "offline" | "needs_setup";
+
+let syncStatus: SyncStatus = isCloudEnabled() ? "idle" : "offline";
+const statusListeners = new Set<(s: SyncStatus) => void>();
+
+interface SyncMeta {
+  usersAt?: string;
+  dataAt?: string;
+  settingsAt?: string;
+}
+
+interface CloudUserAccount {
+  user: { id: string; email: string; username: string; [key: string]: unknown };
+  passwordHash: string | null;
+}
+
+interface CloudUserStore {
+  version?: number;
+  accounts?: CloudUserAccount[];
+}
+
+interface CloudDataStore {
+  version?: number;
+  courses?: unknown[];
+  registrations?: unknown[];
+  scores?: unknown[];
+  departments?: unknown[];
+  semesterResults?: Record<string, unknown[]>;
+  notifications?: unknown[];
+  courseApprovalSubmissions?: unknown[];
+}
+
+function emptyCloudData(): CloudDataStore {
+  return {
+    version: 6,
+    courses: [],
+    registrations: [],
+    scores: [],
+    departments: [],
+    semesterResults: {},
+    notifications: [],
+    courseApprovalSubmissions: [],
+  };
+}
+
+function normalizeCloudData(raw: string): CloudDataStore {
+  try {
+    const parsed = JSON.parse(raw) as CloudDataStore;
+    const empty = emptyCloudData();
+    return {
+      version: parsed.version ?? empty.version,
+      courses: Array.isArray(parsed.courses) ? parsed.courses : empty.courses,
+      registrations: Array.isArray(parsed.registrations) ? parsed.registrations : empty.registrations,
+      scores: Array.isArray(parsed.scores) ? parsed.scores : empty.scores,
+      departments: Array.isArray(parsed.departments) ? parsed.departments : empty.departments,
+      semesterResults: parsed.semesterResults ?? empty.semesterResults,
+      notifications: Array.isArray(parsed.notifications) ? parsed.notifications : empty.notifications,
+      courseApprovalSubmissions: Array.isArray(parsed.courseApprovalSubmissions)
+        ? parsed.courseApprovalSubmissions
+        : empty.courseApprovalSubmissions,
+    };
+  } catch {
+    return emptyCloudData();
+  }
+}
+
+/** Merge remote portal data with local; never replace non-empty local arrays with empty cloud payloads. */
+function mergeDataBlob(local: CloudDataStore | null, remote: unknown): CloudDataStore {
+  const remoteStore = normalizeCloudData(
+    typeof remote === "string" ? remote : JSON.stringify(remote ?? {})
+  );
+  if (!local) return remoteStore;
+
+  const pick = <T>(remoteArr: T[] | undefined, localArr: T[] | undefined): T[] =>
+    remoteArr?.length ? remoteArr : (localArr ?? []);
+
+  return {
+    version: Math.max(local.version ?? 0, remoteStore.version ?? 0),
+    courses: pick(remoteStore.courses, local.courses),
+    registrations: pick(remoteStore.registrations, local.registrations),
+    scores: pick(remoteStore.scores, local.scores),
+    departments: pick(remoteStore.departments, local.departments),
+    semesterResults: Object.keys(remoteStore.semesterResults ?? {}).length
+      ? remoteStore.semesterResults
+      : (local.semesterResults ?? {}),
+    notifications: pick(remoteStore.notifications, local.notifications),
+    courseApprovalSubmissions: pick(
+      remoteStore.courseApprovalSubmissions,
+      local.courseApprovalSubmissions
+    ),
+  };
+}
+
+function setSyncStatus(status: SyncStatus) {
+  syncStatus = status;
+  statusListeners.forEach(fn => fn(status));
+}
+
+export function getSyncStatus(): SyncStatus {
+  return syncStatus;
+}
+
+export function onSyncStatusChange(listener: (status: SyncStatus) => void): () => void {
+  statusListeners.add(listener);
+  listener(syncStatus);
+  return () => statusListeners.delete(listener);
+}
+
+function dispatchLocalRefresh() {
+  window.dispatchEvent(new CustomEvent("wawuhub:data-changed"));
+  window.dispatchEvent(new CustomEvent("wawuhub:users-changed"));
+  window.dispatchEvent(new CustomEvent("wawuhub:settings-changed"));
+}
+
+function readSyncMeta(): SyncMeta {
+  try {
+    return JSON.parse(localStorage.getItem(SYNC_META_KEY) || "{}") as SyncMeta;
+  } catch {
+    return {};
+  }
+}
+
+function writeSyncMeta(partial: Partial<SyncMeta>) {
+  localStorage.setItem(SYNC_META_KEY, JSON.stringify({ ...readSyncMeta(), ...partial }));
+}
+
+function shouldApplyRemote(remoteAt: string | undefined, localAt?: string): boolean {
+  if (!remoteAt) return true;
+  if (!localAt) return true;
+  return new Date(remoteAt).getTime() > new Date(localAt).getTime();
+}
+
+const DEFAULT_CLOUD_TIMEOUT_MS = 8_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(onTimeout()), ms)),
+  ]);
+}
+
+/** Merge remote roster with local; never drop a local password hash. */
+function mergeUsersBlob(localRaw: string | null, remote: unknown): string {
+  const local: CloudUserStore = localRaw
+    ? (JSON.parse(localRaw) as CloudUserStore)
+    : { version: 3, accounts: [] };
+  const remoteStore = remote as CloudUserStore;
+  if (!remoteStore?.accounts?.length) {
+    return localRaw || JSON.stringify({ version: 3, accounts: [] });
+  }
+
+  const byId = new Map<string, CloudUserAccount>();
+  for (const acc of local.accounts ?? []) {
+    byId.set(acc.user.id, acc);
+  }
+  for (const acc of remoteStore.accounts) {
+    const existing = byId.get(acc.user.id);
+    if (!existing) {
+      byId.set(acc.user.id, { user: acc.user, passwordHash: acc.passwordHash ?? null });
+    } else {
+      byId.set(acc.user.id, {
+        user: acc.user,
+        // FIX: Prefer remote hash if local is null (new device gets the password)
+        passwordHash: existing.passwordHash ?? acc.passwordHash ?? null,
+      });
+    }
+  }
+
+  return JSON.stringify({
+    ...local,
+    version: Math.max(local.version ?? 3, remoteStore.version ?? 3),
+    accounts: Array.from(byId.values()),
+  });
+}
+
+/** Sync password hashes (already SHA-256) so sign-in works on every device. */
+function prepareUsersForCloud(raw: string): unknown {
+  const store = JSON.parse(raw) as CloudUserStore;
+  if (!store.accounts) return store;
+  return {
+    ...store,
+    accounts: store.accounts.map(a => ({
+      user: a.user,
+      passwordHash: a.passwordHash ?? null,
+    })),
+  };
+}
+
+/**
+ * Pull institutional data from Supabase into localStorage.
+ * FIX: Works with both anon (unauthenticated) and authenticated sessions.
+ * The app_sync table has an anon select policy so this works on fresh devices.
+ */
+export async function pullCloudStores(timeoutMs = DEFAULT_CLOUD_TIMEOUT_MS): Promise<boolean> {
+  return withTimeout(pullCloudStoresImpl(), timeoutMs, () => {
+    if (syncStatus === "syncing") setSyncStatus("error");
+    return false;
+  });
+}
+
+async function pullCloudStoresImpl(): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+
+  setSyncStatus("syncing");
+  try {
+    const keys = [CLOUD_USERS_KEY, CLOUD_DATA_KEY, CLOUD_SETTINGS_KEY];
+    const { data, error } = await sb
+      .from("app_sync")
+      .select("key, value, updated_at")
+      .in("key", keys);
+
+    if (error) {
+      const msg = error.message?.toLowerCase() ?? "";
+      const code = (error as { code?: string }).code;
+      if (code === "PGRST205" || msg.includes("does not exist") || msg.includes("schema cache")) {
+        setSyncStatus("needs_setup");
+        return false;
+      }
+      // FIX: Don't treat auth errors as hard failures — the anon policy should allow reads
+      if (msg.includes("jwt") || msg.includes("unauthorized") || msg.includes("auth")) {
+        setSyncStatus("offline");
+        return false;
+      }
+      throw error;
+    }
+
+    const meta = readSyncMeta();
+    let pulled = false;
+
+    for (const row of data ?? []) {
+      if (!row?.key || row.value === undefined || row.value === null) continue;
+      const remoteAt = row.updated_at as string | undefined;
+
+      if (row.key === CLOUD_USERS_KEY) {
+        // FIX: Always merge users regardless of timestamp — ensures new devices get accounts
+        const merged = mergeUsersBlob(localStorage.getItem(CLOUD_USERS_KEY), row.value);
+        localStorage.setItem(CLOUD_USERS_KEY, merged);
+        writeSyncMeta({ usersAt: remoteAt });
+        pulled = true;
+      } else if (row.key === CLOUD_DATA_KEY && shouldApplyRemote(remoteAt, meta.dataAt)) {
+        const localRaw = localStorage.getItem(row.key);
+        const local = localRaw ? normalizeCloudData(localRaw) : null;
+        const remote = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
+        const merged = mergeDataBlob(local, remote);
+        localStorage.setItem(row.key, JSON.stringify(merged));
+        writeSyncMeta({ dataAt: remoteAt });
+        pulled = true;
+      } else if (row.key === CLOUD_SETTINGS_KEY && shouldApplyRemote(remoteAt, meta.settingsAt)) {
+        const serialized =
+          typeof row.value === "string" ? row.value : JSON.stringify(row.value);
+        localStorage.setItem(row.key, serialized);
+        writeSyncMeta({ settingsAt: remoteAt });
+        pulled = true;
+      }
+    }
+
+    if (pulled) dispatchLocalRefresh();
+    setSyncStatus("synced");
+    return pulled;
+  } catch (err) {
+    const e = err as { code?: string; message?: string };
+    const msg = e.message?.toLowerCase() ?? "";
+    if (e.code === "PGRST205" || msg.includes("does not exist") || msg.includes("schema cache")) {
+      setSyncStatus("needs_setup");
+    } else {
+      setSyncStatus("error");
+    }
+    return false;
+  }
+}
+
+/** Push local institutional data to Supabase (debounced after writes). */
+export async function pushCloudStores(timeoutMs = DEFAULT_CLOUD_TIMEOUT_MS): Promise<boolean> {
+  return withTimeout(pushCloudStoresImpl(), timeoutMs, () => {
+    if (syncStatus === "syncing") setSyncStatus("error");
+    return false;
+  });
+}
+
+async function pushCloudStoresImpl(): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+
+  // Push requires an authenticated session
+  const { data: sessionData } = await sb.auth.getSession();
+  if (!sessionData.session) return false;
+
+  setSyncStatus("syncing");
+  try {
+    const now = new Date().toISOString();
+    const rows = [CLOUD_USERS_KEY, CLOUD_DATA_KEY, CLOUD_SETTINGS_KEY]
+      .map(key => {
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+        const value =
+          key === CLOUD_USERS_KEY ? prepareUsersForCloud(raw) : (JSON.parse(raw) as unknown);
+        return { key, value, updated_at: now };
+      })
+      .filter(Boolean) as { key: string; value: unknown; updated_at: string }[];
+
+    if (!rows.length) {
+      setSyncStatus("synced");
+      return true;
+    }
+
+    const { error } = await sb.from("app_sync").upsert(rows, { onConflict: "key" });
+    if (error) {
+      const msg = error.message?.toLowerCase() ?? "";
+      const code = (error as { code?: string }).code;
+      if (code === "PGRST205" || msg.includes("does not exist") || msg.includes("schema cache")) {
+        setSyncStatus("needs_setup");
+        return false;
+      }
+      throw error;
+    }
+
+    const metaPatch: Partial<SyncMeta> = {};
+    for (const row of rows) {
+      if (row.key === CLOUD_USERS_KEY) metaPatch.usersAt = now;
+      if (row.key === CLOUD_DATA_KEY) metaPatch.dataAt = now;
+      if (row.key === CLOUD_SETTINGS_KEY) metaPatch.settingsAt = now;
+    }
+    writeSyncMeta(metaPatch);
+
+    setSyncStatus("synced");
+    return true;
+  } catch {
+    setSyncStatus("error");
+    return false;
+  }
+}
+
+export function scheduleCloudPush(delayMs = 400): void {
+  if (!isCloudEnabled()) return;
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    void pushCloudStores();
+  }, delayMs);
+}
+
+/** Live updates when another device changes institutional data. */
+export function subscribeCloudRealtime(onRemoteChange?: () => void): () => void {
+  const sb = getSupabase();
+  if (!sb) return () => {};
+
+  if (realtimeChannel) {
+    void sb.removeChannel(realtimeChannel);
+    realtimeChannel = null;
+  }
+
+  realtimeChannel = sb
+    .channel("app_sync_changes")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "app_sync" },
+      () => {
+        void pullCloudStores().then(() => onRemoteChange?.());
+      }
+    )
+    .subscribe();
+
+  return () => {
+    if (realtimeChannel) {
+      void sb.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+  };
+}
+
+/** Keep sessions alive across tabs/devices; pull fresh data on token refresh. */
+export function subscribeAuthStateChange(
+  onChange: (event: string, hasSession: boolean) => void
+): () => void {
+  const sb = getSupabase();
+  if (!sb) return () => {};
+
+  const { data: { subscription } } = sb.auth.onAuthStateChange((event, session) => {
+    onChange(event, Boolean(session));
+    if (session && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+      void pullCloudStores();
+    }
+  });
+
+  return () => subscription.unsubscribe();
+}
+
+export async function ensureCloudAuthSession(): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+  const { data } = await sb.auth.getSession();
+  return Boolean(data.session);
+}

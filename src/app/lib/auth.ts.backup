@@ -1,0 +1,798 @@
+import type { AuthResult, RegisterInput, Role, UpdateUserInput, User } from "./types";
+import { isRegistrarRole, portalRole } from "./types";
+import { getFacultyForDepartment } from "./types";
+import { isCloudEnabled } from "./config";
+import { getSupabase } from "./supabaseClient";
+import { pullCloudStores, pushCloudStores, scheduleCloudPush } from "./cloudSync";
+
+const AUTH_CLOUD_TIMEOUT_MS = 8_000;
+
+function withAuthTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>(resolve => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
+const USERS_KEY = "wawuhub_users";
+const SESSION_KEY = "wawuhub_session";
+const STORE_VERSION = 3;
+const LECTURER_TARGET = 25;
+
+interface StoredAccount {
+  user: User;
+  passwordHash: string | null;
+}
+
+interface UserStore {
+  version: number;
+  accounts: StoredAccount[];
+}
+
+type SeedUser = { user: Omit<User, "id"> & { id: string }; password?: string };
+
+const SEED_STUDENTS: SeedUser[] = [
+  { user: { id: "STU001", name: "Adaeze Okonkwo", username: "adaeze.ok", email: "adaeze@stu.edu", role: "student", matricNo: "CSC/2021/001", department: "Computer Science", faculty: "Science and Technology", level: "300", semester: 2, createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "STU002", name: "Emeka Chukwu", username: "emeka.ch", email: "emeka@stu.edu", role: "student", matricNo: "CSC/2021/002", department: "Computer Science", faculty: "Science and Technology", level: "300", semester: 2, createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "STU003", name: "Fatima Bello", username: "fatima.b", email: "fatima@stu.edu", role: "student", matricNo: "ACC/2020/015", department: "Accounting", faculty: "Business Administration", level: "300", semester: 1, createdAt: "2024-01-01T00:00:00.000Z" } },
+];
+
+const SEED_LECTURERS: SeedUser[] = [
+  { user: { id: "LEC001", name: "Dr. Samuel Adeyemi", username: "samuel.ad", email: "sadeyemi@univ.edu", role: "lecturer", staffId: "LEC/001", department: "Computer Science", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC002", name: "Prof. Grace Eze", username: "grace.eze", email: "geze@univ.edu", role: "lecturer", staffId: "LEC/002", department: "Accounting", faculty: "Business Administration", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC003", name: "Dr. Ibrahim Musa", username: "ibrahim.m", email: "imusa@univ.edu", role: "lecturer", staffId: "LEC/003", department: "Pharmacy", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC004", name: "Dr. Chinedu Okafor", username: "chinedu.ok", email: "cokafor@univ.edu", role: "lecturer", staffId: "LEC/004", department: "Bio Science", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC005", name: "Dr. Amina Hassan", username: "amina.h", email: "ahassan@univ.edu", role: "lecturer", staffId: "LEC/005", department: "Med Lab Science", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC006", name: "Prof. James Okoro", username: "james.ok", email: "jokoro@univ.edu", role: "lecturer", staffId: "LEC/006", department: "Law", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC007", name: "Dr. Blessing Etim", username: "blessing.e", email: "betim@univ.edu", role: "lecturer", staffId: "LEC/007", department: "International Relations", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC008", name: "Dr. Michael Asante", username: "michael.a", email: "masante@univ.edu", role: "lecturer", staffId: "LEC/008", department: "Human Resource Management", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC009", name: "Dr. Precious Nwosu", username: "precious.n", email: "pnwosu@univ.edu", role: "lecturer", staffId: "LEC/009", department: "Logic and Transportation", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC010", name: "Dr. Kemi Adebayo", username: "kemi.ad", email: "kadebayo@univ.edu", role: "lecturer", staffId: "LEC/010", department: "Mass Communication", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC011", name: "Dr. Yusuf Bello", username: "yusuf.b", email: "ybello@univ.edu", role: "lecturer", staffId: "LEC/011", department: "Environmental Management", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC012", name: "Dr. Ngozi Ibe", username: "ngozi.i", email: "nibe@univ.edu", role: "lecturer", staffId: "LEC/012", department: "Public Health", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC013", name: "Prof. David Chukwu", username: "david.ch", email: "dchukwu@univ.edu", role: "lecturer", staffId: "LEC/013", department: "Banking and Finance", faculty: "Business Administration", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC014", name: "Dr. Fatima Yusuf", username: "fatima.y", email: "fyusuf@univ.edu", role: "lecturer", staffId: "LEC/014", department: "Entrepreneurship Management", faculty: "Business Administration", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC015", name: "Dr. Emmanuel Eze", username: "emmanuel.e", email: "eeze@univ.edu", role: "lecturer", staffId: "LEC/015", department: "Marketing Management", faculty: "Business Administration", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC016", name: "Dr. Marie Dubois", username: "marie.d", email: "mdubois@univ.edu", role: "lecturer", staffId: "LEC/016", department: "French Language", faculty: "French Language", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC017", name: "Dr. Tunde Bakare", username: "tunde.b", email: "tbakare@univ.edu", role: "lecturer", staffId: "LEC/017", department: "Computer Science", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC018", name: "Dr. Halima Garba", username: "halima.g", email: "hgarba@univ.edu", role: "lecturer", staffId: "LEC/018", department: "Pharmacy", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC019", name: "Dr. Prince Osei", username: "prince.o", email: "posei@univ.edu", role: "lecturer", staffId: "LEC/019", department: "Law", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC020", name: "Dr. Ada Obi", username: "ada.obi", email: "aobi@univ.edu", role: "lecturer", staffId: "LEC/020", department: "Accounting", faculty: "Business Administration", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC021", name: "Dr. Kwame Mensah", username: "kwame.m", email: "kmensah@univ.edu", role: "lecturer", staffId: "LEC/021", department: "Bio Science", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC022", name: "Dr. Zainab Ali", username: "zainab.a", email: "zali@univ.edu", role: "lecturer", staffId: "LEC/022", department: "Med Lab Science", faculty: "Science and Technology", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC023", name: "Dr. Peter Ogunleye", username: "peter.o", email: "pogunleye@univ.edu", role: "lecturer", staffId: "LEC/023", department: "Mass Communication", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC024", name: "Dr. Sarah Mensah", username: "sarah.m", email: "smensah@univ.edu", role: "lecturer", staffId: "LEC/024", department: "Public Health", faculty: "Social Science/Humanities", createdAt: "2024-01-01T00:00:00.000Z" } },
+  { user: { id: "LEC025", name: "Dr. Victor Anya", username: "victor.a", email: "vanya@univ.edu", role: "lecturer", staffId: "LEC/025", department: "Banking and Finance", faculty: "Business Administration", createdAt: "2024-01-01T00:00:00.000Z" } },
+];
+
+const SEED_REGISTRAR: SeedUser = {
+  user: { id: "REG001", name: "Registrar Office", username: "registrar", email: "registrar@univ.edu", role: "registrar", createdAt: "2024-01-01T00:00:00.000Z" },
+  password: "registrar2024",
+};
+
+async function hashPassword(password: string): Promise<string> {
+  const data = new TextEncoder().encode(`${password}:wawuhub:v1`);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase();
+}
+
+function deriveUsername(email: string, used: Set<string>): string {
+  let base = email.split("@")[0].toLowerCase().replace(/[^a-z0-9._]/g, "") || "user";
+  let candidate = base;
+  let n = 1;
+  while (used.has(candidate)) {
+    candidate = `${base}${n++}`;
+  }
+  return candidate;
+}
+
+function readStore(): UserStore {
+  try {
+    const raw = localStorage.getItem(USERS_KEY);
+    if (!raw) return { version: STORE_VERSION, accounts: [] };
+    const parsed = JSON.parse(raw) as Partial<UserStore>;
+    if (!Array.isArray(parsed.accounts)) {
+      return { version: STORE_VERSION, accounts: [] };
+    }
+    return {
+      version: typeof parsed.version === "number" ? parsed.version : STORE_VERSION,
+      accounts: parsed.accounts,
+    };
+  } catch {
+    return { version: STORE_VERSION, accounts: [] };
+  }
+}
+
+function writeStore(store: UserStore): void {
+  localStorage.setItem(USERS_KEY, JSON.stringify(store));
+  window.dispatchEvent(new CustomEvent("wawuhub:users-changed"));
+  scheduleCloudPush();
+}
+
+/** Cloud auth errors that should not block local registrar onboarding */
+function isNonBlockingCloudAuthError(message: string | undefined): boolean {
+  if (!message) return true;
+  const msg = message.toLowerCase();
+  return (
+    msg.includes("rate limit") ||
+    msg.includes("too many requests") ||
+    msg.includes("email not confirmed") ||
+    msg.includes("network") ||
+    msg.includes("fetch") ||
+    msg.includes("timeout") ||
+    msg.includes("503") ||
+    msg.includes("502")
+  );
+}
+
+function friendlyCloudAuthError(message: string): string {
+  const msg = message.toLowerCase();
+  if (msg.includes("rate limit")) {
+    return "Cloud sign-up is temporarily rate-limited. Your registrar account was created on this device — sign in with the same credentials. Multi-device sync will connect when Supabase allows it (usually within an hour).";
+  }
+  if (msg.includes("email not confirmed")) {
+    return "Check your email to confirm your address, or disable “Confirm email” in Supabase Auth settings. You can sign in on this device now.";
+  }
+  if (msg.includes("already") || msg.includes("registered")) {
+    return "This email is already registered in the cloud. Sign in with your password, or use a different email.";
+  }
+  return message;
+}
+
+async function establishCloudSession(
+  email: string,
+  password: string,
+  user: User,
+  options?: { allowSignUp?: boolean }
+): Promise<void> {
+  const sb = getSupabase();
+  if (!sb || !isCloudEnabled()) return;
+
+  const normalizedEmail = normalizeEmail(email);
+  const role = portalRole(user.role);
+
+  try {
+    const signInResult = await withAuthTimeout(
+      sb.auth.signInWithPassword({ email: normalizedEmail, password }),
+      AUTH_CLOUD_TIMEOUT_MS
+    );
+    if (!signInResult) return;
+
+    let signInError = signInResult.error;
+
+    if (signInError && options?.allowSignUp) {
+      const signInMsg = signInError.message.toLowerCase();
+      if (!signInMsg.includes("rate limit") && !signInMsg.includes("too many")) {
+        const signUpResult = await withAuthTimeout(
+          sb.auth.signUp({
+            email: normalizedEmail,
+            password,
+            options: {
+              data: { username: user.username, full_name: user.name, role },
+            },
+          }),
+          AUTH_CLOUD_TIMEOUT_MS
+        );
+
+        if (signUpResult && !signUpResult.error) {
+          await withAuthTimeout(
+            sb.auth.signInWithPassword({ email: normalizedEmail, password }),
+            AUTH_CLOUD_TIMEOUT_MS
+          );
+        } else if (signUpResult?.error) {
+          const msg = signUpResult.error.message.toLowerCase();
+          if (msg.includes("already") || msg.includes("registered")) {
+            await withAuthTimeout(
+              sb.auth.signInWithPassword({ email: normalizedEmail, password }),
+              AUTH_CLOUD_TIMEOUT_MS
+            );
+          }
+        }
+      }
+    }
+
+    void pullCloudStores();
+    void pushCloudStores();
+  } catch {
+    /* cloud link is best-effort — local session already saved */
+  }
+}
+
+/** Persist session and best-effort cloud link after local auth succeeds. */
+async function finalizeAuthSuccess(user: User, password: string): Promise<AuthResult> {
+  saveSession(user);
+  if (isCloudEnabled() && user.email) {
+    void establishCloudSession(user.email, password, user, { allowSignUp: true });
+  }
+  return { success: true, user };
+}
+
+async function cloudSignUpRegistrar(
+  email: string,
+  password: string,
+  username: string,
+  name: string
+): Promise<AuthResult | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+
+  const normalizedEmail = normalizeEmail(email);
+
+  // Prefer sign-in when the cloud account already exists (avoids extra signUp calls)
+  const { data: existing, error: signInError } = await sb.auth.signInWithPassword({
+    email: normalizedEmail,
+    password,
+  });
+  if (existing.session) return null;
+
+  const signInMsg = signInError?.message?.toLowerCase() ?? "";
+  if (signInMsg.includes("rate limit") || signInMsg.includes("too many")) {
+    return { success: false, error: signInError!.message };
+  }
+  if (signInMsg.includes("invalid login") || signInMsg.includes("invalid credentials")) {
+    const { error: signUpError } = await sb.auth.signUp({
+      email: normalizedEmail,
+      password,
+      options: {
+        data: { username, full_name: name, role: "registrar" },
+      },
+    });
+    if (!signUpError) {
+      await sb.auth.signInWithPassword({ email: normalizedEmail, password }).catch(() => {});
+      return null;
+    }
+    const upMsg = signUpError.message.toLowerCase();
+    if (upMsg.includes("already") || upMsg.includes("registered")) {
+      const retry = await sb.auth.signInWithPassword({ email: normalizedEmail, password });
+      if (!retry.error) return null;
+      return { success: false, error: retry.error.message };
+    }
+    return { success: false, error: signUpError.message };
+  }
+
+  if (signInError) return { success: false, error: signInError.message };
+  return null;
+}
+
+export async function restoreCloudSession(): Promise<User | null> {
+  const localUser = loadSessionUser();
+  if (!isCloudEnabled()) return localUser;
+
+  const sb = getSupabase();
+  if (!sb) return localUser;
+
+  try {
+    const sessionResult = await withAuthTimeout(sb.auth.getSession(), 4_000);
+    if (!sessionResult) return localUser;
+
+    const { data } = sessionResult;
+    if (!data.session?.user?.email) return localUser;
+
+    void pullCloudStores();
+
+    const cloudUser = getUserByEmail(data.session.user.email);
+    if (cloudUser) {
+      saveSession(cloudUser);
+      return cloudUser;
+    }
+  } catch {
+    /* fall back to local session */
+  }
+
+  return localUser;
+}
+
+function findAccountByLogin(loginId: string, store: UserStore): StoredAccount | undefined {
+  const trimmed = loginId.trim();
+  const normalizedEmail = normalizeEmail(trimmed);
+  const normalizedUsername = normalizeUsername(trimmed);
+  return store.accounts.find(a =>
+    normalizeEmail(a.user.email) === normalizedEmail ||
+    normalizeUsername(a.user.username) === normalizedUsername
+  );
+}
+
+function resolveEmailForLogin(loginId: string, store: UserStore): string | null {
+  const trimmed = loginId.trim();
+  if (trimmed.includes("@")) return normalizeEmail(trimmed);
+  return findAccountByLogin(trimmed, store)?.user.email ?? null;
+}
+
+async function tryVerifyCloudPassword(email: string, password: string): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb || !isCloudEnabled()) return false;
+
+  const result = await withAuthTimeout(
+    sb.auth.signInWithPassword({ email: normalizeEmail(email), password }),
+    AUTH_CLOUD_TIMEOUT_MS
+  );
+  return Boolean(result?.data?.session);
+}
+
+/** When Supabase auth succeeds but roster row is missing locally (new device). */
+async function provisionLocalAccountFromCloud(
+  loginId: string,
+  password: string,
+  role: Role
+): Promise<StoredAccount | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+
+  const sessionResult = await withAuthTimeout(sb.auth.getSession(), AUTH_CLOUD_TIMEOUT_MS);
+  const sessionUser = sessionResult?.data?.session?.user;
+  if (!sessionUser?.email) return null;
+
+  const email = normalizeEmail(sessionUser.email);
+  const loginEmail = resolveEmailForLogin(loginId, readStore());
+  if (loginEmail && loginEmail !== email) return null;
+
+  const meta = sessionUser.user_metadata ?? {};
+  const accountRole = portalRole(String(meta.role || role));
+  if (portalRole(accountRole) !== portalRole(role)) return null;
+
+  const used = new Set(readStore().accounts.map(a => normalizeUsername(a.user.username)));
+  const user: User = {
+    id: generateId(accountRole),
+    name: String(meta.full_name || meta.name || email.split("@")[0]),
+    email,
+    username: normalizeUsername(String(meta.username || deriveUsername(email, used))),
+    role: accountRole,
+    department: typeof meta.department === "string" ? meta.department : undefined,
+    faculty: typeof meta.faculty === "string" ? meta.faculty : undefined,
+    createdAt: new Date().toISOString(),
+    ...(accountRole === "student"
+      ? {
+          matricNo: typeof meta.matric_no === "string" ? meta.matric_no : generateMatricNo(),
+          level: typeof meta.level === "string" ? meta.level : "100",
+          semester: typeof meta.semester === "number" ? meta.semester : 1,
+        }
+      : {}),
+    ...(accountRole === "lecturer" && typeof meta.staff_id === "string"
+      ? { staffId: meta.staff_id }
+      : accountRole === "lecturer"
+        ? { staffId: generateStaffId() }
+        : {}),
+  };
+
+  const account: StoredAccount = {
+    user,
+    passwordHash: await hashPassword(password),
+  };
+
+  const store = readStore();
+  if (store.accounts.some(a => normalizeEmail(a.user.email) === email)) return null;
+  store.accounts.push(account);
+  writeStore(store);
+  return account;
+}
+
+async function migrateStore(store: UserStore): Promise<boolean> {
+  let changed = false;
+  const usedUsernames = new Set<string>();
+
+  store.accounts.forEach(a => {
+    if (a.user.username) usedUsernames.add(normalizeUsername(a.user.username));
+  });
+
+  for (const account of store.accounts) {
+    if (!account.user.username) {
+      account.user.username = deriveUsername(account.user.email, usedUsernames);
+      usedUsernames.add(account.user.username);
+      changed = true;
+    }
+  }
+
+  const lecturerCount = store.accounts.filter(a => a.user.role === "lecturer").length;
+  if (lecturerCount < LECTURER_TARGET) {
+    const existingIds = new Set(store.accounts.map(a => a.user.id));
+    for (const seed of SEED_LECTURERS) {
+      if (store.accounts.filter(a => a.user.role === "lecturer").length >= LECTURER_TARGET) break;
+      if (existingIds.has(seed.user.id)) continue;
+      if (store.accounts.some(a => normalizeEmail(a.user.email) === normalizeEmail(seed.user.email))) continue;
+      if (store.accounts.some(a => normalizeUsername(a.user.username) === normalizeUsername(seed.user.username))) continue;
+      store.accounts.push({
+        user: seed.user as User,
+        passwordHash: seed.password ? await hashPassword(seed.password) : null,
+      });
+      existingIds.add(seed.user.id);
+      changed = true;
+    }
+  }
+
+  if (store.version < STORE_VERSION) {
+    for (const account of store.accounts) {
+      if ((account.user.role as string) === "admin") {
+        account.user.role = "registrar";
+        changed = true;
+      }
+      if (account.user.id === "ADM001") {
+        account.user.id = "REG001";
+        account.user.role = "registrar";
+        changed = true;
+      }
+    }
+    store.version = STORE_VERSION;
+    changed = true;
+  }
+
+  return changed;
+}
+
+async function seedIfEmpty(): Promise<void> {
+  const store = readStore();
+  if (store.accounts.length > 0) {
+    if (await migrateStore(store)) writeStore(store);
+    return;
+  }
+
+  const allSeeds: SeedUser[] = [...SEED_STUDENTS, ...SEED_LECTURERS, SEED_REGISTRAR];
+  const accounts: StoredAccount[] = [];
+  for (const entry of allSeeds) {
+    accounts.push({
+      user: entry.user as User,
+      passwordHash: entry.password ? await hashPassword(entry.password) : null,
+    });
+  }
+  writeStore({ version: STORE_VERSION, accounts });
+}
+
+let initialized = false;
+
+export async function initAuth(): Promise<void> {
+  if (initialized) return;
+  await seedIfEmpty();
+  initialized = true;
+}
+
+export function getAllUsers(): User[] {
+  return readStore().accounts.map(a => a.user);
+}
+
+export function getUserById(id: string): User | undefined {
+  return getAllUsers().find(u => u.id === id);
+}
+
+export function getUserByEmail(email: string): User | undefined {
+  const normalized = normalizeEmail(email);
+  return readStore().accounts.find(a => normalizeEmail(a.user.email) === normalized)?.user;
+}
+
+export function getUserByUsername(username: string): User | undefined {
+  const normalized = normalizeUsername(username);
+  return readStore().accounts.find(a => normalizeUsername(a.user.username) === normalized)?.user;
+}
+
+function generateId(role: Role): string {
+  const prefix = role === "student" ? "STU" : role === "lecturer" ? "LEC" : "REG";
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+}
+
+function generateMatricNo(): string {
+  const year = new Date().getFullYear();
+  const seq = Math.floor(Math.random() * 900) + 100;
+  return `GEN/${year}/${seq}`;
+}
+
+function generateStaffId(): string {
+  return `STF/${Math.floor(Math.random() * 9000) + 1000}`;
+}
+
+function validateUsername(username: string): string | null {
+  const u = normalizeUsername(username);
+  if (u.length < 3) return "Username must be at least 3 characters.";
+  if (u.length > 30) return "Username must be 30 characters or fewer.";
+  if (!/^[a-z0-9._]+$/.test(u)) return "Username may only contain lowercase letters, numbers, dots, and underscores.";
+  return null;
+}
+
+function buildUser(input: RegisterInput): User {
+  const faculty = input.faculty?.trim() || getFacultyForDepartment(input.department || "") || "General";
+  const base: User = {
+    id: generateId(input.role),
+    name: input.name.trim(),
+    email: normalizeEmail(input.email),
+    username: normalizeUsername(input.username),
+    role: input.role,
+    department: input.department?.trim() || undefined,
+    faculty,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (input.role === "student") {
+    return {
+      ...base,
+      matricNo: input.matricNo || generateMatricNo(),
+      level: input.level || "100",
+      semester: input.semester ?? 1,
+    };
+  }
+
+  if (input.role === "lecturer") {
+    return { ...base, staffId: input.staffId || generateStaffId() };
+  }
+
+  return base;
+}
+
+function isUsernameTaken(username: string, excludeUserId?: string): boolean {
+  const normalized = normalizeUsername(username);
+  return readStore().accounts.some(
+    a => normalizeUsername(a.user.username) === normalized && a.user.id !== excludeUserId
+  );
+}
+
+function isEmailTaken(email: string, excludeUserId?: string): boolean {
+  const normalized = normalizeEmail(email);
+  return readStore().accounts.some(
+    a => normalizeEmail(a.user.email) === normalized && a.user.id !== excludeUserId
+  );
+}
+
+export async function register(input: RegisterInput): Promise<AuthResult> {
+  await initAuth();
+
+  const name = input.name.trim();
+  const email = normalizeEmail(input.email);
+  const username = normalizeUsername(input.username);
+  const password = input.password?.trim() || "";
+
+  if (!name) return { success: false, error: "Full name is required." };
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { success: false, error: "Please enter a valid email address." };
+  }
+  const usernameError = validateUsername(username);
+  if (usernameError) return { success: false, error: usernameError };
+  if (isRegistrarRole(input.role) && password.length < 6) {
+    return { success: false, error: "Password must be at least 6 characters." };
+  }
+  if (isEmailTaken(email)) {
+    return { success: false, error: "An account with this email already exists." };
+  }
+  if (isUsernameTaken(username)) {
+    return { success: false, error: "This username is already taken. Choose a different one." };
+  }
+
+  const user = buildUser({ ...input, email, name, username });
+  const passwordHash = password ? await hashPassword(password) : null;
+
+  let cloudWarning: string | undefined;
+
+  if (isCloudEnabled() && isRegistrarRole(input.role) && password) {
+    const cloudErr = await cloudSignUpRegistrar(email, password, username, name);
+    if (cloudErr && !cloudErr.success) {
+      if (isNonBlockingCloudAuthError(cloudErr.error)) {
+        cloudWarning = friendlyCloudAuthError(cloudErr.error!);
+      } else {
+        return { success: false, error: friendlyCloudAuthError(cloudErr.error!) };
+      }
+    }
+  }
+
+  const store = readStore();
+  store.accounts.push({ user, passwordHash });
+  writeStore(store);
+
+  saveSession(user);
+
+  if (isCloudEnabled()) {
+    if (isRegistrarRole(input.role) && password && !cloudWarning) {
+      void establishCloudSession(email, password, user, { allowSignUp: true }).then(() => {
+        void pushCloudStores();
+      });
+    } else {
+      void pushCloudStores();
+    }
+  }
+
+  return { success: true, user, warning: cloudWarning };
+}
+
+export async function preregisterUser(input: Omit<RegisterInput, "password" | "role"> & { role: "student" | "lecturer" }): Promise<AuthResult> {
+  return register({ ...input, password: "" });
+}
+
+export async function login(loginId: string, password: string, role: Role): Promise<AuthResult> {
+  await initAuth();
+
+  if (!loginId.trim()) {
+    return { success: false, error: "Enter your email or username." };
+  }
+
+  if (isCloudEnabled()) {
+    await pullCloudStores();
+  }
+
+  let store = readStore();
+  let account = findAccountByLogin(loginId, store);
+
+  if (!account && isCloudEnabled()) {
+    const email = resolveEmailForLogin(loginId, store) ?? (loginId.includes("@") ? normalizeEmail(loginId) : null);
+    if (email && (await tryVerifyCloudPassword(email, password))) {
+      await pullCloudStores();
+      store = readStore();
+      account = findAccountByLogin(loginId, store);
+      if (!account) {
+        account = await provisionLocalAccountFromCloud(loginId, password, role) ?? undefined;
+        if (account) store = readStore();
+      }
+    }
+  }
+
+  if (!account) {
+    return {
+      success: false,
+      error: "No account found. Use the username or email assigned by the registrar, or contact them to create your account.",
+    };
+  }
+
+  if (portalRole(account.user.role) !== portalRole(role)) {
+    return {
+      success: false,
+      error: `This account is registered as a ${portalRole(account.user.role)}. Please select the correct role.`,
+    };
+  }
+
+  if (!account.passwordHash) {
+    const nextPassword = password.trim();
+    if (nextPassword.length < 6) {
+      return {
+        success: false,
+        error: "First sign-in: enter a new personal password (minimum 6 characters) in the password field, then sign in again.",
+      };
+    }
+
+    const email = account.user.email;
+    if (isCloudEnabled() && email && (await tryVerifyCloudPassword(email, nextPassword))) {
+      account.passwordHash = await hashPassword(nextPassword);
+      writeStore(store);
+      return finalizeAuthSuccess(account.user, nextPassword);
+    }
+
+    account.passwordHash = await hashPassword(nextPassword);
+    writeStore(store);
+    return finalizeAuthSuccess(account.user, nextPassword);
+  }
+
+  const passwordHash = await hashPassword(password);
+  if (account.passwordHash !== passwordHash) {
+    const email = account.user.email;
+    if (isCloudEnabled() && email && (await tryVerifyCloudPassword(email, password))) {
+      account.passwordHash = passwordHash;
+      const idx = store.accounts.findIndex(a => a.user.id === account!.user.id);
+      if (idx >= 0) {
+        store.accounts[idx].passwordHash = passwordHash;
+        writeStore(store);
+      }
+      return finalizeAuthSuccess(account.user, password);
+    }
+    return { success: false, error: "Incorrect password. Please try again." };
+  }
+
+  return finalizeAuthSuccess(account.user, password);
+}
+
+export async function updateUser(userId: string, input: UpdateUserInput): Promise<AuthResult> {
+  await initAuth();
+  const store = readStore();
+  const idx = store.accounts.findIndex(a => a.user.id === userId);
+  if (idx < 0) return { success: false, error: "User not found." };
+
+  const account = store.accounts[idx];
+  const user = { ...account.user };
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) return { success: false, error: "Name cannot be empty." };
+    user.name = name;
+  }
+  if (input.email !== undefined) {
+    const email = normalizeEmail(input.email);
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { success: false, error: "Invalid email address." };
+    }
+    if (isEmailTaken(email, userId)) return { success: false, error: "Email already in use." };
+    user.email = email;
+  }
+  if (input.username !== undefined) {
+    const usernameError = validateUsername(input.username);
+    if (usernameError) return { success: false, error: usernameError };
+    const username = normalizeUsername(input.username);
+    if (isUsernameTaken(username, userId)) return { success: false, error: "Username already taken." };
+    user.username = username;
+  }
+  if (input.department !== undefined) user.department = input.department.trim() || undefined;
+  if (input.faculty !== undefined) user.faculty = input.faculty.trim() || undefined;
+  if (input.level !== undefined) user.level = input.level;
+  if (input.semester !== undefined) user.semester = input.semester;
+  if (input.staffId !== undefined) user.staffId = input.staffId.trim() || undefined;
+  if (input.matricNo !== undefined) user.matricNo = input.matricNo.trim() || undefined;
+  if (input.avatar !== undefined) user.avatar = input.avatar || undefined;
+
+  store.accounts[idx].user = user;
+
+  if (input.password && input.password.length >= 6) {
+    store.accounts[idx].passwordHash = await hashPassword(input.password);
+  } else if (input.password && input.password.length > 0) {
+    return { success: false, error: "Password must be at least 6 characters." };
+  }
+
+  writeStore(store);
+
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const session = JSON.parse(raw) as { userId?: string };
+      if (session.userId === userId) saveSession(user);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  if (isCloudEnabled() && input.password && input.password.length >= 6 && user.email) {
+    void establishCloudSession(user.email, input.password, user, { allowSignUp: false });
+  }
+
+  return { success: true, user };
+}
+
+export async function deleteUser(userId: string): Promise<AuthResult> {
+  await initAuth();
+  const store = readStore();
+  const account = store.accounts.find(a => a.user.id === userId);
+  if (!account) return { success: false, error: "User not found." };
+  if (isRegistrarRole(account.user.role)) {
+    return { success: false, error: "Registrar accounts cannot be deleted." };
+  }
+
+  store.accounts = store.accounts.filter(a => a.user.id !== userId);
+  writeStore(store);
+
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const session = JSON.parse(raw) as { userId?: string };
+      if (session.userId === userId) void clearSession();
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return { success: true, user: account.user };
+}
+
+export function saveSession(user: User): void {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({
+    userId: user.id,
+    email: user.email,
+    username: user.username,
+    role: user.role,
+    savedAt: new Date().toISOString(),
+  }));
+}
+
+export function loadSessionUser(): User | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const { userId } = JSON.parse(raw);
+    return getUserById(userId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearSession(): Promise<void> {
+  localStorage.removeItem(SESSION_KEY);
+  const sb = getSupabase();
+  if (sb) await sb.auth.signOut();
+}
+
+export { SESSION_KEY };
