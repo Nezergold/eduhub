@@ -3,7 +3,7 @@ import type {
   Course, CourseApprovalSubmission, Department, Notification, NotificationType,
   Registration, ReviewStatus, Score, SemesterResult, User, View,
 } from "./types";
-import { computeCourseFee, formatCourseFee, COURSE_REGISTRATION_FEE, DEPARTMENT_NAMES, FACULTIES, FACULTY_STRUCTURE, getFacultyForDepartment, isRegistrarRole, MAX_LECTURER_COURSES } from "./types";
+import { computeCourseFee, formatCourseFee, COURSE_REGISTRATION_FEE, DEPARTMENT_NAMES, FACULTIES, FACULTY_STRUCTURE, getFacultyForDepartment, isRegistrarRole, isDeanRole, MAX_LECTURER_COURSES } from "./types";
 import { calcGrade, today, uid } from "./utils";
 import { scheduleCloudPush } from "./cloudSync";
 
@@ -295,6 +295,16 @@ export function notifyRegistrars(title: string, message: string, type: Notificat
   });
 }
 
+export function notifyDeans(title: string, message: string, type: NotificationType, link?: View): void {
+  getAllUsers().filter(u => isDeanRole(u.role)).forEach(dean => {
+    addNotification({ userId: dean.id, title, message, type, link });
+  });
+}
+
+export function notifyUser(userId: string, title: string, message: string, type: NotificationType, link?: View): void {
+  addNotification({ userId, title, message, type, link });
+}
+
 export function markNotificationRead(id: string): void {
   const store = readStore();
   const n = store.notifications.find(x => x.id === id);
@@ -396,6 +406,37 @@ export function removeLecturerCourse(lecturer: User, courseId: string): boolean 
 
 export function countApprovedStudents(courseId: string): number {
   return getRegistrations().filter(r => r.courseId === courseId && r.status === "approved").length;
+}
+
+export function updateCourse(courseId: string, patch: Partial<Pick<Course, "code" | "title" | "units" | "level" | "semester" | "department" | "faculty">>): Course | null {
+  const store = readStore();
+  const course = store.courses.find(c => c.id === courseId);
+  if (!course) return null;
+  if (patch.code) course.code = patch.code.toUpperCase();
+  if (patch.title) course.title = patch.title;
+  if (patch.units !== undefined) course.units = patch.units;
+  if (patch.level) course.level = patch.level;
+  if (patch.semester !== undefined) course.semester = patch.semester;
+  if (patch.department) course.department = patch.department;
+  if (patch.faculty) course.faculty = patch.faculty;
+  if (patch.code || patch.title) {
+    course.subjects = buildSubjects(course.code, course.title);
+  }
+  writeStore(store);
+  return course;
+}
+
+export function deleteCourse(courseId: string): boolean {
+  const store = readStore();
+  const hasActiveRegs = store.registrations.some(
+    r => r.courseId === courseId && r.status !== "rejected"
+  );
+  if (hasActiveRegs) return false;
+  const idx = store.courses.findIndex(c => c.id === courseId);
+  if (idx < 0) return false;
+  store.courses.splice(idx, 1);
+  writeStore(store);
+  return true;
 }
 
 export function updateCourseLecturer(courseId: string, lecturerId: string, lecturerName: string): void {
@@ -674,23 +715,23 @@ export function submitCourseScores(
         publish: false,
         reviewStatus: options?.publish ? "pending" : "draft",
       });
-      if (options?.publish) {
-        addNotification({
-          userId: e.studentId,
-          title: "Results Submitted for Review",
-          message: `Your score for ${course.code} has been submitted and is awaiting registrar approval.`,
-          type: "score",
-          link: "results",
-        });
-      }
     }
   });
-  notifyRegistrars(
-    options?.publish ? "Final Grade Sheet Submitted" : "Scores Saved as Draft",
-    `${lecturer.name} ${options?.publish ? "submitted final grades for" : "saved draft scores for"} ${course.code}.`,
-    "score",
-    "result-reviews"
-  );
+  if (options?.publish) {
+    notifyDeans(
+      "Results Submitted for Dean Review",
+      `${lecturer.name} submitted ${entries.length} score(s) for ${course.code} for your review.`,
+      "score",
+      "dean-reviews"
+    );
+  } else {
+    notifyDeans(
+      "Draft Scores Saved",
+      `${lecturer.name} saved draft scores for ${course.code}.`,
+      "score",
+      "dean-reviews"
+    );
+  }
 }
 
 export function submitCourseScoresForReview(courseCode: string, lecturer: User): number {
@@ -705,11 +746,11 @@ export function submitCourseScoresForReview(courseCode: string, lecturer: User):
   });
   if (count > 0) {
     writeStore(store);
-    notifyAdmins(
-      "Results Awaiting Review",
+    notifyDeans(
+      "Results Awaiting Dean Review",
       `${lecturer.name} submitted ${count} result(s) for ${courseCode}.`,
       "score",
-      "result-reviews"
+      "dean-reviews"
     );
   }
   return count;
@@ -724,7 +765,7 @@ export function adminReviewScore(
 ): boolean {
   const store = readStore();
   const score = store.scores.find(s => s.studentId === studentId && s.courseCode === courseCode);
-  if (!score || score.reviewStatus !== "pending") return false;
+  if (!score || score.reviewStatus !== "dean_review") return false;
 
   const now = new Date().toISOString();
   score.reviewStatus = decision;
@@ -738,10 +779,20 @@ export function adminReviewScore(
     addNotification({
       userId: score.studentId,
       title: "Results Published",
-      message: `Your score for ${score.courseCode} has been approved. Grade: ${score.grade}.`,
+      message: `Your score for ${score.courseCode} has been approved by the registrar. Grade: ${score.grade}.`,
       type: "score",
       link: "results",
     });
+    const course = store.courses.find(c => c.code === courseCode);
+    if (course?.lecturerId) {
+      addNotification({
+        userId: course.lecturerId,
+        title: "Results Approved by Registrar",
+        message: `Results for ${courseCode} have been approved and published.`,
+        type: "score",
+        link: "scores",
+      });
+    }
   } else {
     score.published = false;
     score.locked = false;
@@ -750,7 +801,7 @@ export function adminReviewScore(
     if (course?.lecturerId) {
       addNotification({
         userId: course.lecturerId,
-        title: "Results Returned",
+        title: "Results Returned by Registrar",
         message: `Results for ${courseCode} were returned: ${note || "Please revise and resubmit."}`,
         type: "score",
         link: "scores",
@@ -762,13 +813,89 @@ export function adminReviewScore(
   return true;
 }
 
+export function deanReviewScore(
+  studentId: string,
+  courseCode: string,
+  decision: "approved" | "rejected",
+  deanName: string,
+  note?: string
+): boolean {
+  const store = readStore();
+  const score = store.scores.find(s => s.studentId === studentId && s.courseCode === courseCode);
+  if (!score || score.reviewStatus !== "pending") return false;
+
+  const now = new Date().toISOString();
+  score.reviewNote = note;
+  score.reviewedAt = now;
+  score.reviewedBy = deanName;
+
+  if (decision === "approved") {
+    score.reviewStatus = "dean_review";
+    score.locked = true;
+    const course = store.courses.find(c => c.code === courseCode);
+    if (course?.lecturerId) {
+      addNotification({
+        userId: course.lecturerId,
+        title: "Results Forwarded to Registrar",
+        message: `Dean ${deanName} has forwarded your ${courseCode} results to the registrar for final approval.`,
+        type: "score",
+        link: "scores",
+      });
+    }
+    notifyRegistrars(
+      "Results Forwarded by Dean",
+      `Dean ${deanName} forwarded ${courseCode} results for your final review.`,
+      "score",
+      "result-reviews"
+    );
+  } else {
+    score.published = false;
+    score.locked = false;
+    score.reviewStatus = "rejected";
+    const course = store.courses.find(c => c.code === courseCode);
+    if (course?.lecturerId) {
+      addNotification({
+        userId: course.lecturerId,
+        title: "Results Returned by Dean",
+        message: `Results for ${courseCode} were returned by Dean ${deanName}: ${note || "Please revise and resubmit."}`,
+        type: "score",
+        link: "scores",
+      });
+    }
+  }
+  writeStore(store);
+  return true;
+}
+
+export function deanReviewAllPendingScores(
+  courseCode: string,
+  decision: "approved" | "rejected",
+  deanName: string,
+  note?: string
+): number {
+  const pending = getScores().filter(s => s.courseCode === courseCode && s.reviewStatus === "pending");
+  pending.forEach(s => deanReviewScore(s.studentId, s.courseCode, decision, deanName, note));
+  return pending.length;
+}
+
+export function deleteScore(studentId: string, courseCode: string): boolean {
+  const store = readStore();
+  const idx = store.scores.findIndex(s => s.studentId === studentId && s.courseCode === courseCode);
+  if (idx < 0) return false;
+  const score = store.scores[idx];
+  if (score.locked || score.reviewStatus === "pending" || score.reviewStatus === "dean_review" || score.reviewStatus === "approved") return false;
+  store.scores.splice(idx, 1);
+  writeStore(store);
+  return true;
+}
+
 export function adminReviewAllPendingScores(
   courseCode: string,
   decision: "approved" | "rejected",
   adminName: string,
   note?: string
 ): number {
-  const pending = getScores().filter(s => s.courseCode === courseCode && s.reviewStatus === "pending");
+  const pending = getScores().filter(s => s.courseCode === courseCode && s.reviewStatus === "dean_review");
   pending.forEach(s => adminReviewScore(s.studentId, s.courseCode, decision, adminName, note));
   return pending.length;
 }
@@ -1099,6 +1226,10 @@ export function adminReviewCourseSubmission(
 }
 
 export function getPendingResultReviews(): Score[] {
+  return getScores().filter(s => s.reviewStatus === "dean_review");
+}
+
+export function getDeanPendingReviews(): Score[] {
   return getScores().filter(s => s.reviewStatus === "pending");
 }
 

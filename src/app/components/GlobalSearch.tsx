@@ -46,6 +46,8 @@ export function GlobalSearch() {
         { match: "student", title: "Student Management", subtitle: "View and manage faculty students", view: "dean-students" },
         { match: "course", title: "Course Assignment", subtitle: "Assign courses to students", view: "dean-courses" },
         { match: "lecturer", title: "Lecturer Management", subtitle: "Assign lecturers to departments", view: "dean-lecturers" },
+        { match: "review", title: "Score Review", subtitle: "Review and forward lecturer scores", view: "dean-reviews" },
+        { match: "score", title: "Score Review", subtitle: "Review and forward lecturer scores", view: "dean-reviews" },
         { match: "analytic", title: "Faculty Analytics", subtitle: "View faculty statistics", view: "dean-analytics" },
         { match: "setting", title: "Account Settings", subtitle: "Manage your profile", view: "settings" },
       ];

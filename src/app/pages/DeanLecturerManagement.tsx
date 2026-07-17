@@ -1,18 +1,17 @@
 import { useMemo, useState } from "react";
-import { UserCheck, CheckCircle, AlertCircle, BookOpen, Building2, Plus, Search, Edit3, X, Trash2 } from "lucide-react";
+import { UserCheck, CheckCircle, AlertCircle, BookOpen, Building2, Search, Edit3, X, Trash2, Users, Plus, Save } from "lucide-react";
 import { useAppData } from "../context/AppContext";
-import { getDepartmentsByFaculty, getFacultyForDepartment } from "../lib/types";
-import type { User } from "../lib/types";
+import { getDepartmentsByFaculty, getFacultyForDepartment, ACADEMIC_LEVELS } from "../lib/types";
+import type { User, Course } from "../lib/types";
 
 export function DeanLecturerManagement() {
-  const { user, getFacultyCourses, getFacultyLecturers, assignLecturer, updateUser, deleteLecturer, createDepartment, refresh } = useAppData();
+  const { user, getFacultyCourses, getFacultyLecturers, assignLecturer, updateUser, deleteLecturer, createCourse, updateCourse, deleteCourse, refresh } = useAppData();
   const faculty = user.faculty || "";
 
   const facultyCourses = useMemo(() => getFacultyCourses(faculty), [getFacultyCourses, faculty]);
   const facultyLecturers = useMemo(() => getFacultyLecturers(faculty), [getFacultyLecturers, faculty]);
   const facultyDepts = useMemo(() => getDepartmentsByFaculty(faculty), [faculty]);
 
-  const [newDeptName, setNewDeptName] = useState("");
   const [selectedLecturer, setSelectedLecturer] = useState("");
   const [assignDeptToLecturer, setAssignDeptToLecturer] = useState("");
   const [selectedCourse, setSelectedCourse] = useState("");
@@ -22,6 +21,12 @@ export function DeanLecturerManagement() {
   const [editForm, setEditForm] = useState({ name: "", email: "", username: "", phone: "", department: "", staffId: "" });
   const [deleteConfirm, setDeleteConfirm] = useState<User | null>(null);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const emptyCourseForm = { code: "", title: "", department: "", level: "100", semester: 1, units: 3 };
+  const [courseForm, setCourseForm] = useState(emptyCourseForm);
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null);
+  const [deleteCourseConfirm, setDeleteCourseConfirm] = useState<Course | null>(null);
+  const [courseSearch, setCourseSearch] = useState("");
 
   const filtered = useMemo(() => {
     if (!search) return facultyLecturers;
@@ -35,20 +40,87 @@ export function DeanLecturerManagement() {
     );
   }, [facultyLecturers, search]);
 
-  function handleCreateDepartment() {
-    const name = newDeptName.trim();
-    if (!name) {
-      setMsg({ type: "err", text: "Enter a department name." });
+  const filteredCourses = useMemo(() => {
+    if (!courseSearch) return facultyCourses;
+    const q = courseSearch.toLowerCase();
+    return facultyCourses.filter(c =>
+      c.code.toLowerCase().includes(q) ||
+      c.title.toLowerCase().includes(q) ||
+      (c.department || "").toLowerCase().includes(q) ||
+      (c.lecturer || "").toLowerCase().includes(q)
+    );
+  }, [facultyCourses, courseSearch]);
+
+  function handleCreateCourse() {
+    if (!courseForm.code.trim() || !courseForm.title.trim()) {
+      setMsg({ type: "err", text: "Course code and title are required." });
       return;
     }
-    if (facultyDepts.some(d => d.toLowerCase() === name.toLowerCase())) {
-      setMsg({ type: "err", text: `"${name}" already exists in ${faculty}.` });
+    if (!courseForm.department) {
+      setMsg({ type: "err", text: "Select a department for the course." });
       return;
     }
-    createDepartment(name, faculty);
-    setMsg({ type: "ok", text: `Department "${name}" created under ${faculty}. It will sync to all devices automatically.` });
-    setNewDeptName("");
+    const existing = facultyCourses.find(c => c.code.toUpperCase() === courseForm.code.toUpperCase());
+    if (existing) {
+      setMsg({ type: "err", text: `Course ${courseForm.code.toUpperCase()} already exists.` });
+      return;
+    }
+    createCourse({
+      code: courseForm.code.toUpperCase(),
+      title: courseForm.title.trim(),
+      units: courseForm.units,
+      department: courseForm.department,
+      faculty,
+      level: courseForm.level,
+      semester: courseForm.semester,
+      lecturer: "Unassigned",
+      subjects: [],
+    });
+    setMsg({ type: "ok", text: `${courseForm.code.toUpperCase()} — ${courseForm.title} created.` });
+    setCourseForm(emptyCourseForm);
     refresh();
+  }
+
+  function openEditCourse(course: Course) {
+    setEditingCourse(course);
+    setCourseForm({
+      code: course.code,
+      title: course.title,
+      department: course.department || "",
+      level: course.level || "100",
+      semester: course.semester || 1,
+      units: course.units || 3,
+    });
+  }
+
+  function handleSaveEditCourse() {
+    if (!editingCourse) return;
+    if (!courseForm.code.trim() || !courseForm.title.trim()) {
+      setMsg({ type: "err", text: "Course code and title are required." });
+      return;
+    }
+    updateCourse(editingCourse.id, {
+      code: courseForm.code.toUpperCase(),
+      title: courseForm.title.trim(),
+      units: courseForm.units,
+      department: courseForm.department,
+      level: courseForm.level,
+      semester: courseForm.semester,
+    });
+    setMsg({ type: "ok", text: `${courseForm.code.toUpperCase()} updated successfully.` });
+    setEditingCourse(null);
+    setCourseForm(emptyCourseForm);
+    refresh();
+  }
+
+  function handleDeleteCourse(course: Course) {
+    const ok = deleteCourse(course.id);
+    if (ok) {
+      setMsg({ type: "ok", text: `${course.code} has been deleted.` });
+      setDeleteCourseConfirm(null);
+    } else {
+      setMsg({ type: "err", text: `Cannot delete ${course.code} — it has active student enrollments.` });
+    }
   }
 
   function handleAssignDept() {
@@ -163,24 +235,8 @@ export function DeanLecturerManagement() {
 
       <div className="bg-card rounded-xl border border-border p-5">
         <h3 className="text-sm font-bold text-foreground font-[Outfit] mb-4 flex items-center gap-2">
-          <Building2 className="w-4 h-4 text-emerald-700" /> Create Department
+          <Building2 className="w-4 h-4 text-emerald-700" /> Departments in {faculty}
         </h3>
-        <p className="text-xs text-muted-foreground mb-3">
-          Add a new department under your faculty.
-        </p>
-        <div className="flex gap-3">
-          <input
-            value={newDeptName}
-            onChange={e => setNewDeptName(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") handleCreateDepartment(); }}
-            className="flex-1 bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-            placeholder="e.g. Computer Science"
-          />
-          <button onClick={handleCreateDepartment}
-            className="bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold text-sm hover:bg-emerald-800 transition-colors flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Create
-          </button>
-        </div>
         {facultyDepts.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-3">
             {facultyDepts.map(d => (
@@ -223,34 +279,168 @@ export function DeanLecturerManagement() {
 
         <div className="bg-card rounded-xl border border-border p-5">
           <h3 className="text-sm font-bold text-foreground font-[Outfit] mb-4 flex items-center gap-2">
-            <BookOpen className="w-4 h-4 text-emerald-700" /> Allocate Lecturer to Course
+            <BookOpen className="w-4 h-4 text-emerald-700" /> Course Management
           </h3>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-1">Course ({facultyCourses.length} in faculty)</label>
-              <select value={selectedCourse} onChange={e => setSelectedCourse(e.target.value)}
-                className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
-                <option value="">Select course...</option>
-                {facultyCourses.map(c => (
-                  <option key={c.id} value={c.id}>{c.code} — {c.title} (Level {c.level})</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-1">Assign to Lecturer</label>
-              <select value={assignCourseLecturer} onChange={e => setAssignCourseLecturer(e.target.value)}
-                className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
-                <option value="">Unassigned</option>
-                {facultyLecturers.map(l => (
-                  <option key={l.id} value={l.id}>{l.name} — {l.department || "No dept"}</option>
-                ))}
-              </select>
-            </div>
-            <button onClick={handleAssignCourse} disabled={!selectedCourse}
-              className="w-full bg-emerald-700 text-white font-semibold py-2.5 rounded-lg hover:bg-emerald-800 transition-colors disabled:opacity-50 text-sm">
-              Assign Lecturer to Course
+
+          <div className="flex gap-2 mb-4">
+            <button type="button" onClick={() => { setEditingCourse(null); setCourseForm(emptyCourseForm); }}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg border transition-all ${!editingCourse ? "bg-emerald-700 text-white border-emerald-700" : "border-border text-muted-foreground hover:border-emerald-500/50"}`}>
+              <Plus className="w-3.5 h-3.5" /> Create
+            </button>
+            <button type="button" onClick={() => { setEditingCourse(null); }}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg border transition-all ${editingCourse ? "bg-emerald-700 text-white border-emerald-700" : "border-border text-muted-foreground hover:border-emerald-500/50"}`}>
+              <Users className="w-3.5 h-3.5" /> Allocate ({facultyCourses.length})
             </button>
           </div>
+
+          {!editingCourse && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Course Code *</label>
+                  <input value={courseForm.code} onChange={e => setCourseForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald-500"
+                    placeholder="e.g. CSC401" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Units</label>
+                  <input type="number" min={1} max={6} value={courseForm.units} onChange={e => setCourseForm(f => ({ ...f, units: Number(e.target.value) || 3 }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Course Title *</label>
+                <input value={courseForm.title} onChange={e => setCourseForm(f => ({ ...f, title: e.target.value }))}
+                  className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+                  placeholder="e.g. Database Systems" />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Department *</label>
+                  <select value={courseForm.department} onChange={e => setCourseForm(f => ({ ...f, department: e.target.value }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                    <option value="">Select...</option>
+                    {facultyDepts.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Level</label>
+                  <select value={courseForm.level} onChange={e => setCourseForm(f => ({ ...f, level: e.target.value }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                    {ACADEMIC_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Semester</label>
+                  <select value={courseForm.semester} onChange={e => setCourseForm(f => ({ ...f, semester: Number(e.target.value) }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                    <option value={1}>Sem 1</option>
+                    <option value={2}>Sem 2</option>
+                  </select>
+                </div>
+              </div>
+              <button onClick={handleCreateCourse}
+                className="w-full bg-emerald-700 text-white font-semibold py-2.5 rounded-lg hover:bg-emerald-800 transition-colors text-sm flex items-center justify-center gap-1.5">
+                <Plus className="w-4 h-4" /> Create Course
+              </button>
+            </div>
+          )}
+
+          {editingCourse && (
+            <div className="space-y-3 border-t border-border pt-4">
+              <p className="text-xs text-muted-foreground">Editing: <strong className="font-mono">{editingCourse.code}</strong></p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Course Code</label>
+                  <input value={courseForm.code} onChange={e => setCourseForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Units</label>
+                  <input type="number" min={1} max={6} value={courseForm.units} onChange={e => setCourseForm(f => ({ ...f, units: Number(e.target.value) || 3 }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Course Title</label>
+                <input value={courseForm.title} onChange={e => setCourseForm(f => ({ ...f, title: e.target.value }))}
+                  className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500" />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Department</label>
+                  <select value={courseForm.department} onChange={e => setCourseForm(f => ({ ...f, department: e.target.value }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                    <option value="">Select...</option>
+                    {facultyDepts.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Level</label>
+                  <select value={courseForm.level} onChange={e => setCourseForm(f => ({ ...f, level: e.target.value }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                    {ACADEMIC_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1">Semester</label>
+                  <select value={courseForm.semester} onChange={e => setCourseForm(f => ({ ...f, semester: Number(e.target.value) }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                    <option value={1}>Sem 1</option>
+                    <option value={2}>Sem 2</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setEditingCourse(null); setCourseForm(emptyCourseForm); }}
+                  className="flex-1 bg-muted text-foreground font-semibold py-2.5 rounded-lg hover:bg-muted/80 transition-colors text-sm">
+                  Cancel
+                </button>
+                <button onClick={handleSaveEditCourse}
+                  className="flex-1 bg-emerald-700 text-white font-semibold py-2.5 rounded-lg hover:bg-emerald-800 transition-colors text-sm flex items-center justify-center gap-1.5">
+                  <Save className="w-4 h-4" /> Save Changes
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!editingCourse && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <div className="flex items-center justify-between mb-3">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <input value={courseSearch} onChange={e => setCourseSearch(e.target.value)}
+                    className="w-full bg-input-background border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500"
+                    placeholder="Search courses..." />
+                </div>
+              </div>
+              {filteredCourses.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">No courses yet. Create one above.</p>
+              ) : (
+                <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  {filteredCourses.map(c => {
+                    const assigned = facultyLecturers.find(l => l.id === c.lecturerId);
+                    return (
+                      <div key={c.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/30 gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-mono font-semibold text-foreground">{c.code} <span className="font-normal text-muted-foreground">— {c.title}</span></p>
+                          <p className="text-[11px] text-muted-foreground">{c.department} · Level {c.level} · Sem {c.semester} · {c.units} units · {assigned ? assigned.name : <span className="text-amber-600">Unassigned</span>}</p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button onClick={() => openEditCourse(c)} className="text-emerald-700 hover:text-emerald-900 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors" title="Edit">
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => setDeleteCourseConfirm(c)} className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors" title="Delete">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -394,6 +584,25 @@ export function DeanLecturerManagement() {
               </button>
               <button onClick={handleEditSave} className="flex-1 bg-emerald-700 text-white font-semibold py-2.5 rounded-lg hover:bg-emerald-800 transition-colors text-sm">
                 Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteCourseConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setDeleteCourseConfirm(null)}>
+          <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-sm mx-4 p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-foreground font-[Outfit] mb-2">Delete Course</h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              Are you sure you want to delete <strong className="font-mono">{deleteCourseConfirm.code}</strong> — {deleteCourseConfirm.title}? Students assigned to this course will be unlinked.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeleteCourseConfirm(null)} className="flex-1 bg-muted text-foreground font-semibold py-2.5 rounded-lg hover:bg-muted/80 transition-colors text-sm">
+                Cancel
+              </button>
+              <button onClick={() => handleDeleteCourse(deleteCourseConfirm)} className="flex-1 bg-red-600 text-white font-semibold py-2.5 rounded-lg hover:bg-red-700 transition-colors text-sm">
+                Delete
               </button>
             </div>
           </div>

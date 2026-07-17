@@ -10,7 +10,7 @@ import {
   Plus, Search, Upload, Check, AlertCircle, TrendingUp, Award,
   BookMarked, UserCheck, Layers, BarChart2, ChevronDown,
   Building2, FlaskConical, Download, CheckCircle, Clock, XCircle,
-  UserPlus, Edit2, Trash2, Filter, ArrowUpDown, Wallet, School
+  UserPlus, Edit2, Trash2, Filter, ArrowUpDown, Wallet, School, ClipboardCheck
 } from "lucide-react";
 import { Logo, PrintBranding } from "./components/Logo";
 import { NotificationBell } from "./components/NotificationBell";
@@ -32,6 +32,7 @@ import { DeanOverview } from "./pages/DeanOverview";
 import { DeanCourseAssignment } from "./pages/DeanCourseAssignment";
 import { DeanLecturerManagement } from "./pages/DeanLecturerManagement";
 import { DeanStudentManagement } from "./pages/DeanStudentManagement";
+import { DeanScoreReview } from "./pages/DeanScoreReview";
 import { DeanAnalytics } from "./pages/DeanAnalytics";
 import { exportOfficialCourseForm } from "./lib/courseFormPdf";
 import type { Role, User, View, Course, ReviewStatus } from "./lib/types";
@@ -143,6 +144,7 @@ const NAV_ITEMS: Record<Role, { label: string; view: View; icon: any }[]> = {
     { label: "Student Management", view: "dean-students", icon: Users },
     { label: "Lecturer Management", view: "dean-lecturers", icon: UserCheck },
     { label: "Course Assignment", view: "dean-courses", icon: ClipboardList },
+    { label: "Score Review", view: "dean-reviews", icon: ClipboardCheck },
     { label: "Faculty Analytics", view: "dean-analytics", icon: BarChart2 },
     { label: "Settings", view: "settings", icon: Settings },
   ],
@@ -965,7 +967,7 @@ function LecturerStudents() {
 }
 
 function LecturerScores() {
-  const { getMyCourses, registrations, courses, scores, allUsers, submitScores } = useAppData();
+  const { getMyCourses, registrations, courses, scores, allUsers, submitScores, deleteScore } = useAppData();
   const myCourses = getMyCourses();
   const [selectedCourse, setSelectedCourse] = useState(myCourses[0]?.id || "");
   const [filterLevel, setFilterLevel] = useState("");
@@ -1034,7 +1036,7 @@ function LecturerScores() {
       return;
     }
     submitScores(course, entries, { publish: true });
-    setSubmitInfo(`Final grade sheet submitted to registrar for ${course.code}. Scores are now locked.`);
+    setSubmitInfo(`Grade sheet submitted to dean for ${course.code}. Scores are now locked.`);
     setTimeout(() => setSubmitInfo(""), 3000);
     } catch (e) {
       setSubmitInfo(e instanceof Error ? e.message : "Submission failed.");
@@ -1119,6 +1121,7 @@ function LecturerScores() {
               <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-20">Total</th>
               <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">Grade</th>
               <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-24">Status</th>
+              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -1135,13 +1138,13 @@ function LecturerScores() {
                   <td className="px-4 py-3 text-sm font-medium text-foreground">{r.studentName}</td>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{student?.matricNo || "—"}</td>
                   <td className="px-4 py-3">
-                    <input type="number" min={0} max={40} disabled={existing?.locked || reviewStatus === "pending" || reviewStatus === "approved"}
+                    <input type="number" min={0} max={40} disabled={existing?.locked || reviewStatus === "pending" || reviewStatus === "dean_review" || reviewStatus === "approved"}
                       value={scoreInputs[r.studentId]?.ca || ""}
                       onChange={e => setScoreInputs(p => ({ ...p, [r.studentId]: { ...p[r.studentId], ca: e.target.value } }))}
                       className="w-20 text-sm font-mono text-center bg-input-background border border-border rounded px-2 py-1.5 focus:outline-none focus:border-accent disabled:opacity-60" />
                   </td>
                   <td className="px-4 py-3">
-                    <input type="number" min={0} max={60} disabled={existing?.locked || reviewStatus === "pending" || reviewStatus === "approved"}
+                    <input type="number" min={0} max={60} disabled={existing?.locked || reviewStatus === "pending" || reviewStatus === "dean_review" || reviewStatus === "approved"}
                       value={scoreInputs[r.studentId]?.exam || ""}
                       onChange={e => setScoreInputs(p => ({ ...p, [r.studentId]: { ...p[r.studentId], exam: e.target.value } }))}
                       className="w-20 text-sm font-mono text-center bg-input-background border border-border rounded px-2 py-1.5 focus:outline-none focus:border-accent disabled:opacity-60" />
@@ -1153,6 +1156,20 @@ function LecturerScores() {
                   <td className="px-4 py-3">
                     {existing ? <ReviewStatusBadge status={reviewStatus} /> : (
                       <span className="text-[11px] text-muted-foreground">Not saved</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {existing && !existing.locked && reviewStatus !== "pending" && reviewStatus !== "dean_review" && reviewStatus !== "approved" && (
+                      <button onClick={() => {
+                        if (confirm(`Delete score for ${r.studentName}?`)) {
+                          deleteScore(r.studentId, course?.code || "");
+                          const newInputs = { ...scoreInputs };
+                          delete newInputs[r.studentId];
+                          setScoreInputs(newInputs);
+                        }
+                      }} className="text-red-500 hover:text-red-700 p-1 rounded-lg hover:bg-red-50 transition-colors text-xs">
+                        Delete
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -1175,7 +1192,7 @@ function LecturerScores() {
           </button>
           <button onClick={handleSubmitForReview}
             className="flex items-center gap-2 bg-accent text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-accent/90 transition-colors">
-            <Check className="w-4 h-4" /> Submit to Registrar
+            <Check className="w-4 h-4" /> Submit to Dean
           </button>
         </div>
       </div>
@@ -1367,8 +1384,9 @@ function AdminUsers() {
   const [deleting, setDeleting] = useState<User | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState("");
-  const [editForm, setEditForm] = useState({ name: "", username: "", email: "", faculty: "", department: "" });
+  const [editForm, setEditForm] = useState({ name: "", username: "", email: "", faculty: "", department: "", phone: "", matricNo: "", staffId: "", level: "" });
   const [editError, setEditError] = useState("");
+  const [viewingProfile, setViewingProfile] = useState<User | null>(null);
 
   const students = allUsers.filter(u => u.role === "student");
   const lecturers = allUsers.filter(u => u.role === "lecturer");
@@ -1391,6 +1409,10 @@ function AdminUsers() {
       email: user.email,
       faculty: user.faculty || "",
       department: user.department || "",
+      phone: user.phone || "",
+      matricNo: user.matricNo || "",
+      staffId: user.staffId || "",
+      level: user.level || "",
     });
     setEditError("");
   }
@@ -1405,6 +1427,10 @@ function AdminUsers() {
       email: editForm.email,
       faculty: editForm.faculty,
       department: editForm.department,
+      phone: editForm.phone,
+      matricNo: editing.role === "student" ? editForm.matricNo : undefined,
+      staffId: editing.role === "lecturer" ? editForm.staffId : undefined,
+      level: editing.role === "student" ? editForm.level : undefined,
     });
     if (result.success) {
       setEditing(null);
@@ -1436,6 +1462,22 @@ function AdminUsers() {
 
   function lecturerCourseCount(lecturerId: string) {
     return courses.filter(c => c.lecturerId === lecturerId).length;
+  }
+
+  function userInitials(name: string) {
+    return name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+  }
+
+  const roleColors: Record<string, string> = {
+    student: "bg-blue-100 text-blue-700",
+    lecturer: "bg-amber-100 text-amber-700",
+    dean: "bg-emerald-100 text-emerald-700",
+    registrar: "bg-purple-100 text-purple-700",
+    admin: "bg-purple-100 text-purple-700",
+  };
+
+  function roleBadge(role: string) {
+    return roleColors[role] || "bg-gray-100 text-gray-700";
   }
 
   return (
@@ -1516,10 +1558,19 @@ function AdminUsers() {
             const courseCount = u.role === "lecturer" ? lecturerCourseCount(u.id) : 0;
             return (
               <div key={u.id} className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{u.name}</p>
-                  <p className="text-xs font-mono text-accent mt-0.5">{u.username}</p>
-                  <p className="text-xs text-muted-foreground font-mono mt-0.5 break-all">{u.email}</p>
+                <div className="flex items-start gap-3">
+                  {u.avatar ? (
+                    <img src={u.avatar} alt={u.name} className="w-10 h-10 rounded-full object-cover border border-border flex-shrink-0" />
+                  ) : (
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${roleBadge(u.role)}`}>
+                      {userInitials(u.name)}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">{u.name}</p>
+                    <p className="text-xs font-mono text-accent mt-0.5">@{u.username}</p>
+                    <p className="text-[11px] text-muted-foreground font-mono mt-0.5 break-all">{u.email}</p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                   <div>
@@ -1528,12 +1579,24 @@ function AdminUsers() {
                   </div>
                   <div>
                     <span className="font-semibold text-foreground/70 block">Role</span>
-                    <span className="capitalize">{u.role}</span>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize ${roleBadge(u.role)}`}>{u.role}</span>
                   </div>
                   <div className="col-span-2">
                     <span className="font-semibold text-foreground/70 block">Faculty / Dept</span>
                     {u.faculty || "—"} · {u.department || "—"}
                   </div>
+                  {u.phone && (
+                    <div>
+                      <span className="font-semibold text-foreground/70 block">Phone</span>
+                      {u.phone}
+                    </div>
+                  )}
+                  {u.level && (
+                    <div>
+                      <span className="font-semibold text-foreground/70 block">Level</span>
+                      {u.level}
+                    </div>
+                  )}
                   {u.role === "lecturer" && courseCount > 0 && (
                     <div className="col-span-2 text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                       Assigned to {courseCount} course{courseCount !== 1 ? "s" : ""}
@@ -1546,13 +1609,17 @@ function AdminUsers() {
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
+                  <button type="button" onClick={() => setViewingProfile(u)}
+                    className="flex-1 min-w-[90px] text-xs text-muted-foreground border border-border px-3 py-2 rounded-lg font-semibold hover:bg-muted/50 flex items-center justify-center gap-1">
+                    View Profile
+                  </button>
                   <button type="button" onClick={() => openEdit(u)}
-                    className="flex-1 min-w-[100px] text-xs text-accent border border-accent/30 px-3 py-2 rounded-lg font-semibold hover:bg-accent/5 flex items-center justify-center gap-1">
+                    className="flex-1 min-w-[90px] text-xs text-accent border border-accent/30 px-3 py-2 rounded-lg font-semibold hover:bg-accent/5 flex items-center justify-center gap-1">
                     <Edit2 className="w-3.5 h-3.5" /> Edit
                   </button>
                   {(u.role === "lecturer" || u.role === "dean") && (
                     <button type="button" onClick={() => openDelete(u)}
-                      className="flex-1 min-w-[100px] text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2 rounded-lg font-semibold hover:bg-red-100 flex items-center justify-center gap-1">
+                      className="flex-1 min-w-[90px] text-xs text-red-700 border border-red-200 bg-red-50 px-3 py-2 rounded-lg font-semibold hover:bg-red-100 flex items-center justify-center gap-1">
                       <Trash2 className="w-3.5 h-3.5" /> Delete
                     </button>
                   )}
@@ -1564,18 +1631,17 @@ function AdminUsers() {
 
         {/* Desktop table */}
         <div className="hidden md:block overflow-x-auto">
-        <table className="w-full min-w-[800px]">
+        <table className="w-full min-w-[900px]">
           <thead>
             <tr className="bg-muted/50 text-left">
-              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</th>
-              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Username</th>
-              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email</th>
+              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">User</th>
               <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">ID</th>
+              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Phone</th>
               <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Faculty / Dept</th>
               {tab === "lecturers" && (
                 <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Courses</th>
               )}
-              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider min-w-[140px]">Actions</th>
+              <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider min-w-[180px]">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1583,10 +1649,24 @@ function AdminUsers() {
               const courseCount = u.role === "lecturer" ? lecturerCourseCount(u.id) : 0;
               return (
               <tr key={u.id} className="border-t border-border hover:bg-muted/20 transition-colors">
-                <td className="px-4 py-3 text-sm font-medium text-foreground">{u.name}</td>
-                <td className="px-4 py-3 font-mono text-xs text-accent font-semibold">{u.username}</td>
-                <td className="px-4 py-3 text-xs text-muted-foreground font-mono">{u.email}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    {u.avatar ? (
+                      <img src={u.avatar} alt={u.name} className="w-8 h-8 rounded-full object-cover border border-border flex-shrink-0" />
+                    ) : (
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${roleBadge(u.role)}`}>
+                        {userInitials(u.name)}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{u.name}</p>
+                      <p className="text-[11px] font-mono text-accent">@{u.username}</p>
+                      <p className="text-[11px] text-muted-foreground font-mono truncate">{u.email}</p>
+                    </div>
+                  </div>
+                </td>
                 <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{u.matricNo || u.staffId || "—"}</td>
+                <td className="px-4 py-3 text-xs text-muted-foreground">{u.phone || "—"}</td>
                 <td className="px-4 py-3 text-xs text-muted-foreground">
                   <p>{u.faculty || "—"}</p>
                   <p className="text-[11px]">{u.department || "—"}</p>
@@ -1602,6 +1682,10 @@ function AdminUsers() {
                 )}
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1.5">
+                    <button type="button" onClick={() => setViewingProfile(u)}
+                      className="text-xs text-muted-foreground border border-border px-2 py-1 rounded font-semibold hover:bg-muted/50">
+                      View
+                    </button>
                     <button type="button" onClick={() => openEdit(u)}
                       className="text-xs text-accent border border-accent/30 px-2 py-1 rounded font-semibold hover:bg-accent/5 flex items-center gap-1">
                       <Edit2 className="w-3 h-3" /> Edit
@@ -1662,6 +1746,35 @@ function AdminUsers() {
                     ))}
                   </select>
                 </div>
+                <div>
+                  <label className="text-xs font-semibold block mb-1">Phone</label>
+                  <input value={editForm.phone} onChange={e => setEditForm(p => ({ ...p, phone: e.target.value }))}
+                    className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent" placeholder="Phone number" />
+                </div>
+                {editing.role === "student" && (
+                  <>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">Matric No</label>
+                      <input value={editForm.matricNo} onChange={e => setEditForm(p => ({ ...p, matricNo: e.target.value }))}
+                        className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">Level</label>
+                      <select value={editForm.level} onChange={e => setEditForm(p => ({ ...p, level: e.target.value }))}
+                        className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent">
+                        <option value="">—</option>
+                        {ACADEMIC_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                    </div>
+                  </>
+                )}
+                {editing.role === "lecturer" && (
+                  <div>
+                    <label className="text-xs font-semibold block mb-1">Staff ID</label>
+                    <input value={editForm.staffId} onChange={e => setEditForm(p => ({ ...p, staffId: e.target.value }))}
+                      className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" />
+                  </div>
+                )}
               </div>
               {editError && <p className="text-xs text-destructive">{editError}</p>}
               <div className="flex gap-2 pt-2">
@@ -1703,6 +1816,94 @@ function AdminUsers() {
               <button type="button" disabled={deleteLoading} onClick={handleDeleteConfirm}
                 className="flex-1 text-sm bg-red-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50">
                 {deleteLoading ? "Deleting…" : "Delete Lecturer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingProfile && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setViewingProfile(null)}>
+          <div className="bg-card border border-border rounded-xl p-6 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-4 mb-5">
+              {viewingProfile.avatar ? (
+                <img src={viewingProfile.avatar} alt={viewingProfile.name} className="w-16 h-16 rounded-full object-cover border-2 border-border flex-shrink-0" />
+              ) : (
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0 ${roleBadge(viewingProfile.role)}`}>
+                  {userInitials(viewingProfile.name)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold font-[Outfit] text-foreground truncate">{viewingProfile.name}</h3>
+                <p className="text-sm font-mono text-accent">@{viewingProfile.username}</p>
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full capitalize mt-1 inline-block ${roleBadge(viewingProfile.role)}`}>
+                  {viewingProfile.role}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Email</span>
+                <p className="text-sm font-mono text-foreground">{viewingProfile.email}</p>
+              </div>
+
+              {viewingProfile.phone && (
+                <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Phone</span>
+                  <p className="text-sm text-foreground">{viewingProfile.phone}</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                {viewingProfile.matricNo && (
+                  <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Matric No</span>
+                    <p className="text-sm font-mono text-foreground">{viewingProfile.matricNo}</p>
+                  </div>
+                )}
+                {viewingProfile.staffId && (
+                  <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Staff ID</span>
+                    <p className="text-sm font-mono text-foreground">{viewingProfile.staffId}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Faculty</span>
+                  <p className="text-sm text-foreground">{viewingProfile.faculty || "—"}</p>
+                </div>
+                <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Department</span>
+                  <p className="text-sm text-foreground">{viewingProfile.department || "—"}</p>
+                </div>
+              </div>
+
+              {viewingProfile.level && (
+                <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Level</span>
+                  <p className="text-sm text-foreground">Level {viewingProfile.level}</p>
+                </div>
+              )}
+
+              {viewingProfile.role === "lecturer" && (
+                <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Assigned Courses</span>
+                  <p className="text-sm text-foreground">{lecturerCourseCount(viewingProfile.id)} course(s)</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button type="button" onClick={() => { setViewingProfile(null); openEdit(viewingProfile); }}
+                className="flex-1 text-sm bg-accent text-white px-4 py-2.5 rounded-lg font-semibold hover:bg-accent/90 flex items-center justify-center gap-1.5">
+                <Edit2 className="w-3.5 h-3.5" /> Edit Profile
+              </button>
+              <button type="button" onClick={() => setViewingProfile(null)}
+                className="text-sm border border-border px-4 py-2.5 rounded-lg font-semibold hover:bg-muted/50">
+                Close
               </button>
             </div>
           </div>
@@ -2111,6 +2312,7 @@ const VIEW_TITLES: Record<View, string> = {
   "dean-courses": "Course Assignment",
   "dean-lecturers": "Lecturer Management",
   "dean-students": "Student Management",
+  "dean-reviews": "Score Review",
   "dean-analytics": "Faculty Analytics",
   settings: "Account Settings",
 };
@@ -2287,6 +2489,7 @@ export default function App() {
       if (view === "dean-students") return <DeanStudentManagement />;
       if (view === "dean-courses") return <DeanCourseAssignment />;
       if (view === "dean-lecturers") return <DeanLecturerManagement />;
+      if (view === "dean-reviews") return <DeanScoreReview />;
       if (view === "dean-analytics") return <DeanAnalytics />;
       if (view === "settings") return <AccountSettings user={user} />;
     }

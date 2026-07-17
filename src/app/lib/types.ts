@@ -22,10 +22,10 @@ export type View =
   | "dashboard" | "profile" | "registration" | "results"
   | "courses" | "students" | "scores" | "course-approvals" | "fee-payments" | "users"
   | "departments" | "course-mgmt" | "assignments" | "approvals" | "result-reviews" | "analytics"
-  | "dean-overview" | "dean-courses" | "dean-lecturers" | "dean-students" | "dean-analytics"
+  | "dean-overview" | "dean-courses" | "dean-lecturers" | "dean-students" | "dean-reviews" | "dean-analytics"
   | "settings";
 
-export type ReviewStatus = "draft" | "pending" | "approved" | "rejected";
+export type ReviewStatus = "draft" | "pending" | "dean_review" | "approved" | "rejected";
 export type PaymentStatus = "unpaid" | "paid";
 
 /** Flat course registration fee (pay physically at the bursary) */

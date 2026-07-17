@@ -78,7 +78,7 @@ export function AdminResultReviews() {
                   <span className={`text-xs font-bold px-2 py-0.5 rounded mt-1 inline-block ${gradeBg(s.grade)}`}>{s.grade}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <ReviewStatusBadge status="pending" />
+                  <ReviewStatusBadge status={s.reviewStatus || "dean_review"} />
                   <button type="button" onClick={() => reviewResult(s.studentId, s.courseCode, "approved")}
                     className="flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-lg font-semibold">
                     <CheckCircle className="w-3.5 h-3.5" /> Approve

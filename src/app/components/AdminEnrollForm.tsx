@@ -14,6 +14,9 @@ const EMPTY_FORM = {
   department: "",
   level: "100",
   semester: "1",
+  phone: "",
+  matricNo: "",
+  staffId: "",
 };
 
 interface AdminEnrollFormProps {
@@ -55,6 +58,9 @@ export function AdminEnrollForm({ onSuccess, compact = false, embedded = false }
       faculty: form.faculty,
       level: form.role === "student" ? form.level : undefined,
       semester: form.role === "student" ? Number(form.semester) : undefined,
+      phone: form.phone.trim() || undefined,
+      matricNo: form.role === "student" ? form.matricNo.trim() || undefined : undefined,
+      staffId: form.role === "lecturer" ? form.staffId.trim() || undefined : undefined,
     });
     setLoading(false);
     if (result.success && result.user) {
@@ -148,8 +154,28 @@ export function AdminEnrollForm({ onSuccess, compact = false, embedded = false }
                 <option value="2">Semester 2</option>
               </select>
             </div>
+            <div>
+              <label className="text-xs font-semibold text-foreground block mb-1">Matric Number</label>
+              <input value={form.matricNo} onChange={e => setForm(p => ({ ...p, matricNo: e.target.value }))}
+                className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder="e.g. SCI/2024/001 (auto if blank)" />
+            </div>
           </>
         )}
+        {form.role === "lecturer" && (
+          <div>
+            <label className="text-xs font-semibold text-foreground block mb-1">Staff ID</label>
+            <input value={form.staffId} onChange={e => setForm(p => ({ ...p, staffId: e.target.value }))}
+              className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+              placeholder="e.g. WAUU/L/001 (auto if blank)" />
+          </div>
+        )}
+        <div>
+          <label className="text-xs font-semibold text-foreground block mb-1">Phone</label>
+          <input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
+            className="w-full bg-input-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent"
+            placeholder="e.g. 6XX XXX XXX" />
+        </div>
       </div>
       {formError && <p className="text-xs text-destructive bg-red-50 border border-red-200 rounded-lg px-3 py-2 mt-3">{formError}</p>}
       {success && (

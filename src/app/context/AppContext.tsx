@@ -12,13 +12,14 @@ import {
   upsertScore, publishCourseScores,
   lecturerReviewRegistration, submitCourseApprovalsToAdmin, getCourseApprovalSubmissions,
   adminReviewCourseSubmission, adminReviewScore, adminReviewAllPendingScores,
-  getPendingResultReviews, approveCoursePayment, purgeLecturerReferences,
+  getPendingResultReviews, getDeanPendingReviews, approveCoursePayment, purgeLecturerReferences,
   addLecturerCourse, removeLecturerCourse,
   getFacultyCourses, getFacultyStudents, getFacultyLecturers, getFacultyRegistrations, getFacultyScores,
-  deanAssignStudentToCourse,
+  deanAssignStudentToCourse, deanReviewScore, deanReviewAllPendingScores, deleteScore,
+  updateCourse as storeUpdateCourse, deleteCourse as storeDeleteCourse,
 } from "../lib/store";
 import { getAllUsers } from "../lib/auth";
-import { updateUser as authUpdateUser, deleteUser as authDeleteUser } from "../lib/auth";
+import { updateUser as authUpdateUser, deleteUser as authDeleteUser, preregisterUser } from "../lib/auth";
 
 interface AppDataContextValue {
   user: User;
@@ -54,6 +55,8 @@ interface AppDataContextValue {
   reviewCourseSubmission: (submissionId: string, decision: "approved" | "rejected", note?: string) => void;
   // Admin
   createCourse: (course: Omit<Course, "id">) => Course;
+  updateCourse: (courseId: string, patch: Partial<Pick<Course, "code" | "title" | "units" | "level" | "semester" | "department" | "faculty">>) => Course | null;
+  deleteCourse: (courseId: string) => boolean;
   createDepartment: (name: string, faculty: string) => Department;
   approveRegistration: (id: string) => void;
   rejectRegistration: (id: string) => void;
@@ -77,6 +80,11 @@ interface AppDataContextValue {
   getFacultyRegistrations: (faculty: string) => Registration[];
   getFacultyScores: (faculty: string) => Score[];
   deanAssignStudent: (studentId: string, courseId: string, subjects: string[]) => Registration | null;
+  deanCreateStudentAndAssign: (studentInfo: { name: string; email: string; username: string; matricNo: string; phone?: string; department?: string; faculty?: string; level?: string }, courseId: string) => Promise<{ success: boolean; error?: string; reg?: Registration }>;
+  deanReviewResult: (studentId: string, courseCode: string, decision: "approved" | "rejected", note?: string) => void;
+  deanReviewAllPendingResults: (courseCode: string, decision: "approved" | "rejected", note?: string) => number;
+  deanPendingReviews: Score[];
+  deleteScore: (studentId: string, courseCode: string) => boolean;
 }
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
@@ -202,6 +210,16 @@ export function AppDataProvider({
       refresh();
       return c;
     },
+    updateCourse: (courseId, patch) => {
+      const c = storeUpdateCourse(courseId, patch);
+      if (c) refresh();
+      return c;
+    },
+    deleteCourse: (courseId) => {
+      const ok = storeDeleteCourse(courseId);
+      if (ok) refresh();
+      return ok;
+    },
     createDepartment: (name, faculty) => {
       const d = addDepartment(name, faculty);
       refresh();
@@ -246,6 +264,39 @@ export function AppDataProvider({
       const reg = deanAssignStudentToCourse(studentId, courseId, subjects);
       refresh();
       return reg;
+    },
+    deanCreateStudentAndAssign: async (studentInfo, courseId) => {
+      const result = await preregisterUser({
+        name: studentInfo.name,
+        email: studentInfo.email,
+        username: studentInfo.username,
+        role: "student",
+        department: studentInfo.department,
+        faculty: studentInfo.faculty,
+        level: studentInfo.level,
+        matricNo: studentInfo.matricNo,
+        phone: studentInfo.phone,
+      });
+      if (!result.success) return { success: false, error: result.error };
+      const newUser = result.user!;
+      const reg = deanAssignStudentToCourse(newUser.id, courseId, []);
+      refresh();
+      return { success: true, reg: reg || undefined };
+    },
+    deanReviewResult: (studentId, courseCode, decision, note) => {
+      deanReviewScore(studentId, courseCode, decision, user.name, note);
+      refresh();
+    },
+    deanReviewAllPendingResults: (courseCode, decision, note) => {
+      const count = deanReviewAllPendingScores(courseCode, decision, user.name, note);
+      refresh();
+      return count;
+    },
+    deanPendingReviews: getDeanPendingReviews(),
+    deleteScore: (studentId, courseCode) => {
+      const ok = deleteScore(studentId, courseCode);
+      if (ok) refresh();
+      return ok;
     },
   }), [user, courses, registrations, scores, courseApprovalSubmissions, pendingResultReviews, departments, notifications, unreadCount, refresh, onNavigate, allUsers, tick]);
 
