@@ -231,18 +231,33 @@ function Sidebar({ user, activeView, onNavigate, collapsed, onToggle, onLogout, 
           ))}
         </nav>
 
-        {/* User */}
-        <div className={`border-t border-white/10 p-3 flex items-center gap-3 ${collapsed ? "justify-center" : ""}`}>
-          <UserAvatar user={user} />
+        {/* User + Sign Out */}
+        <div className="border-t border-white/10 p-3 space-y-2">
+          <div className={`flex items-center gap-3 ${collapsed ? "justify-center" : ""}`}>
+            <UserAvatar user={user} />
+            {!collapsed && (
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold truncate">{user.name.split(" ")[0]}</p>
+                <p className="text-[10px] text-white/40 truncate capitalize">{portalRole(user.role)}</p>
+              </div>
+            )}
+          </div>
           {!collapsed && (
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold truncate">{user.name.split(" ")[0]}</p>
-              <p className="text-[10px] text-white/40 truncate capitalize">{portalRole(user.role)}</p>
-            </div>
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center justify-center gap-2 bg-white hover:bg-gold-light text-wine font-semibold border-0 rounded-xl py-2 px-3 text-xs transition-all duration-200"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
           )}
-          {!collapsed && (
-            <button onClick={onLogout} className="text-white/40 hover:text-white transition-colors" title="Sign out">
-              <LogOut className="w-4 h-4" />
+          {collapsed && (
+            <button
+              onClick={onLogout}
+              className="w-full flex items-center justify-center bg-white hover:bg-gold-light text-wine border-0 rounded-xl py-2 transition-all duration-200"
+              title="Sign out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
@@ -253,9 +268,11 @@ function Sidebar({ user, activeView, onNavigate, collapsed, onToggle, onLogout, 
 
 // ─── Top Bar ───────────────────────────────────────────────────────────────────
 
-function TopBar({ user, title, onMenuToggle, onCloudRefresh }: { user: User; title: string; onMenuToggle?: () => void; onCloudRefresh?: () => void }) {
+function TopBar({ user, title, onMenuToggle, onCloudRefresh, onLogout, onNavigate }: { user: User; title: string; onMenuToggle?: () => void; onCloudRefresh?: () => void; onLogout?: () => void; onNavigate?: (v: View) => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
-    <header className="h-14 sm:h-16 bg-card border-b border-border flex items-center px-4 sm:px-6 gap-3 sm:gap-4 flex-shrink-0">
+    <header className="h-14 sm:h-16 bg-card border-b border-border flex items-center px-4 sm:px-6 gap-3 sm:gap-4 flex-shrink-0 relative">
       {onMenuToggle && (
         <button onClick={onMenuToggle} className="lg:hidden text-muted-foreground hover:text-foreground transition-colors p-1">
           <Menu className="w-5 h-5" />
@@ -270,12 +287,41 @@ function TopBar({ user, title, onMenuToggle, onCloudRefresh }: { user: User; tit
         <GlobalSearch />
         <CloudSyncIndicator onRefresh={onCloudRefresh} />
         <NotificationBell />
-        <div className="flex items-center gap-2 pl-2 sm:pl-3 border-l border-border">
-          <UserAvatar user={user} className="w-8 h-8 bg-primary text-primary-foreground" />
-          <div className="hidden sm:block">
-            <p className="text-xs font-semibold text-foreground">{user.name}</p>
-            <p className="text-[10px] text-muted-foreground capitalize">{user.department || user.role}</p>
-          </div>
+        <div className="relative">
+          <button
+            onClick={() => setMenuOpen(o => !o)}
+            className="flex items-center gap-2 pl-2 sm:pl-3 border-l border-border hover:bg-muted/50 rounded-lg py-1 pr-1 transition-colors cursor-pointer"
+          >
+            <UserAvatar user={user} className="w-8 h-8 bg-wine text-white" />
+            <div className="hidden sm:block text-left">
+              <p className="text-xs font-semibold text-foreground">{user.name}</p>
+              <p className="text-[10px] text-muted-foreground capitalize">{user.department || user.role}</p>
+            </div>
+            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground hidden sm:block" />
+          </button>
+
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-full mt-2 w-56 bg-card rounded-xl border border-border shadow-xl z-50 overflow-hidden">
+                <div className="px-4 py-3 border-b border-border bg-wine text-white">
+                  <p className="text-sm font-bold">{user.name}</p>
+                  <p className="text-xs text-white/70 capitalize">{user.department || user.faculty || user.role}</p>
+                  {user.matricNo && <p className="text-[10px] text-white/50 font-mono mt-0.5">{user.matricNo}</p>}
+                  {user.staffId && <p className="text-[10px] text-white/50 font-mono mt-0.5">{user.staffId}</p>}
+                </div>
+                <div className="py-1">
+                  <button
+                    onClick={() => { setMenuOpen(false); onNavigate?.("settings"); }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted/50 transition-colors"
+                  >
+                    <Settings className="w-4 h-4 text-muted-foreground" />
+                    Account Settings
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </header>
@@ -1208,7 +1254,7 @@ function AdminDashboard() {
   const lecturerCount = allUsers.filter(u => u.role === "lecturer").length;
   const stats = [
     { label: "Total Students", value: adminStats.totalStudents, icon: GraduationCap, accent: "bg-accent" },
-    { label: "Total Lecturers", value: lecturerCount, icon: Users, sub: "25 on staff" },
+    { label: "Total Lecturers", value: lecturerCount, icon: Users },
     { label: "Active Courses", value: adminStats.activeCourses, icon: BookOpen },
     { label: "Pending Approvals", value: adminStats.pendingApprovals, icon: Clock },
     { label: "Departments", value: adminStats.departments, icon: Building2 },
@@ -2511,7 +2557,7 @@ export default function App() {
         onMobileClose={() => setMobileNavOpen(false)}
       />
       <div className="flex-1 flex flex-col min-w-0">
-        <TopBar user={user} title={VIEW_TITLES[view]} onMenuToggle={() => setMobileNavOpen(true)} onCloudRefresh={() => setCloudTick(t => t + 1)} />
+        <TopBar user={user} title={VIEW_TITLES[view]} onMenuToggle={() => setMobileNavOpen(true)} onCloudRefresh={() => setCloudTick(t => t + 1)} onLogout={handleLogout} onNavigate={setView} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 safe-bottom">
           <AnimatePresence mode="wait">
             <motion.div

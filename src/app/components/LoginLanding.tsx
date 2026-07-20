@@ -259,11 +259,11 @@ export function LoginFeaturesSection() {
 
 export function LoginHeroHeader() {
   return (
-    <div className="text-center mb-10 sm:mb-12 space-y-3">
+    <div className="text-center mb-10 sm:mb-12 space-y-4">
       <motion.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/10 border border-white/15"
+        className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gold/15 border border-gold/25"
       >
         <School className="w-8 h-8 sm:w-9 sm:h-9 text-gold-light" />
       </motion.div>
@@ -273,23 +273,23 @@ export function LoginHeroHeader() {
         transition={{ delay: 0.1 }}
         className="text-3xl sm:text-4xl md:text-5xl font-semibold sm:font-bold font-[Outfit] text-white tracking-tight leading-snug px-2"
       >
-        Course Registration And Result Processing System
+        {INSTITUTION_NAME}
       </motion.h1>
       <motion.p
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.2 }}
-        className="text-white/60 text-sm sm:text-base mt-1 sm:mt-2 max-w-2xl mx-auto leading-relaxed"
+        className="text-gold-light text-sm sm:text-base font-medium"
       >
-        Integrated academic operations from enrollment to published results
+        {PORTAL_NAME}
       </motion.p>
       <motion.p
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.28 }}
-        className="text-gold-light/80 text-xs sm:text-sm mt-1 font-medium"
+        className="text-white/50 text-sm sm:text-base max-w-lg mx-auto leading-relaxed"
       >
-        {INSTITUTION_NAME} · {PORTAL_NAME}
+        Course registration, result processing, and academic management — all in one place.
       </motion.p>
     </div>
   );

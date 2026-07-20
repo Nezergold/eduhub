@@ -128,58 +128,56 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             </div>
           </section>
 
-          <LoginFeaturesSection />
+          <section className="px-4 sm:px-6 lg:px-8 py-12">
+            <div className="max-w-4xl mx-auto">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <div className="bg-card rounded-2xl border border-border p-6">
+                  <h3 className="text-lg font-bold font-[Outfit] text-foreground mb-4 flex items-center gap-2">
+                    <Compass className="w-5 h-5 text-accent" /> How to navigate
+                  </h3>
+                  <div className="space-y-3">
+                    {[
+                      "Choose your role: Student, Lecturer, Dean, or Registrar.",
+                      "Students and Lecturers: sign in with your assigned username or email, then create a personal password on first sign-in.",
+                      "Deans manage their faculty: assign courses to students, assign lecturers to departments.",
+                      "Registrars manage enrollment, approvals, assignments, and analytics.",
+                    ].map((text) => (
+                      <div key={text} className="flex items-start gap-2 text-sm text-muted-foreground">
+                        <CheckCircle2 className="w-4 h-4 mt-0.5 text-primary shrink-0" />
+                        <span>{text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
-          <section className="px-4 sm:px-6 lg:px-8 pb-12">
-            <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-card rounded-2xl border border-border p-6">
-                <h3 className="text-lg font-bold font-[Outfit] text-foreground mb-4 flex items-center gap-2">
-                  <Compass className="w-5 h-5 text-accent" /> How to navigate
-                </h3>
-                <div className="space-y-3">
-                  {[
-                    "Choose your role: Student, Lecturer, Dean, or Registrar.",
-                    "Students/Lecturers: sign in with your assigned username or email, then create a personal password on first sign-in.",
-                    "Lecturers upload scores; publish to make student results visible.",
-                    "Deans manage their faculty: assign courses to students, assign lecturers to departments.",
-                    "Registrars manage enrollment, approvals, assignments, and analytics.",
-                  ].map((text) => (
-                    <div key={text} className="flex items-start gap-2 text-sm text-muted-foreground">
-                      <CheckCircle2 className="w-4 h-4 mt-0.5 text-primary shrink-0" />
-                      <span>{text}</span>
-                    </div>
-                  ))}
+                <div className="bg-card rounded-2xl border border-border p-6">
+                  <h3 className="text-lg font-bold font-[Outfit] text-foreground mb-4">System overview</h3>
+                  <div className="space-y-3">
+                    {[
+                      { icon: Workflow, label: "Connected workflow", desc: "Data syncs across Student, Lecturer, and Admin portals in real time." },
+                      { icon: ShieldCheck, label: "Role-based security", desc: "Each role sees only what is relevant to their responsibility." },
+                      { icon: CheckCircle2, label: "Result lifecycle", desc: "Scores become visible to students only after publication." },
+                    ].map(item => (
+                      <div key={item.label} className="flex items-start gap-3 py-2 px-3 rounded-lg bg-muted/30">
+                        <item.icon className="w-4 h-4 mt-0.5 text-primary shrink-0" />
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{item.label}</p>
+                          <p className="text-xs text-muted-foreground">{item.desc}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              <div className="bg-card rounded-2xl border border-border p-6">
-                <h3 className="text-lg font-bold font-[Outfit] text-foreground mb-4">System overview</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="rounded-xl border border-border bg-muted/20 p-4">
-                    <Workflow className="w-5 h-5 text-primary mb-2" />
-                    <p className="text-sm font-semibold text-foreground">Connected workflow</p>
-                    <p className="text-xs text-muted-foreground mt-1">Data syncs across Student, Lecturer, and Admin portals.</p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-muted/20 p-4">
-                    <ShieldCheck className="w-5 h-5 text-primary mb-2" />
-                    <p className="text-sm font-semibold text-foreground">Role security</p>
-                    <p className="text-xs text-muted-foreground mt-1">Each role sees only what is relevant to their responsibility.</p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-muted/20 p-4">
-                    <CheckCircle2 className="w-5 h-5 text-primary mb-2" />
-                    <p className="text-sm font-semibold text-foreground">Result lifecycle</p>
-                    <p className="text-xs text-muted-foreground mt-1">Scores become visible to students only after publication.</p>
-                  </div>
-                </div>
-                <div className="mt-5 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => goToAuth(selectedRole, "signin")}
-                    className="inline-flex items-center gap-2 bg-primary text-primary-foreground font-semibold px-5 py-2.5 rounded-xl hover:bg-primary/90 transition-colors"
-                  >
-                    Continue to Sign In <ArrowRight className="w-4 h-4" />
-                  </button>
-                </div>
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => goToAuth(selectedRole, "signin")}
+                  className="inline-flex items-center gap-2 bg-wine hover:bg-wine-dark text-white font-semibold px-8 py-3.5 rounded-xl transition-colors shadow-lg shadow-wine/20 text-sm"
+                >
+                  Get Started <ArrowRight className="w-4 h-4" />
+                </button>
               </div>
             </div>
           </section>
