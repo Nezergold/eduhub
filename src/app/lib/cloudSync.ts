@@ -50,11 +50,12 @@ interface CloudDataStore {
   semesterResults?: Record<string, unknown[]>;
   notifications?: Array<{ id: string; [key: string]: unknown }>;
   courseApprovalSubmissions?: Array<{ id: string; [key: string]: unknown }>;
+  faculties?: Array<{ id: string; [key: string]: unknown }>;
 }
 
 function emptyCloudData(): CloudDataStore {
   return {
-    version: 7,
+    version: 8,
     courses: [],
     registrations: [],
     scores: [],
@@ -62,6 +63,7 @@ function emptyCloudData(): CloudDataStore {
     semesterResults: {},
     notifications: [],
     courseApprovalSubmissions: [],
+    faculties: [],
   };
 }
 
@@ -80,6 +82,7 @@ function normalizeCloudData(raw: string): CloudDataStore {
       courseApprovalSubmissions: Array.isArray(parsed.courseApprovalSubmissions)
         ? parsed.courseApprovalSubmissions
         : empty.courseApprovalSubmissions,
+      faculties: Array.isArray(parsed.faculties) ? parsed.faculties : empty.faculties,
     };
   } catch {
     return emptyCloudData();
@@ -150,6 +153,7 @@ export function mergeDataBlob(local: CloudDataStore | null, remote: unknown): Cl
       "courseApprovalSubmissions",
       mergeArrayById
     ) as CloudDataStore["courseApprovalSubmissions"],
+    faculties: pickMerged("faculties", mergeArrayById) as CloudDataStore["faculties"],
   };
 }
 
