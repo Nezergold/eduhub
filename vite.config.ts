@@ -54,4 +54,10 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+  // This folder is the old copy inside the download wrapper. Pin its dev port
+  // away from 5173 so it can never shadow the real project (eduhub-main).
+  server: {
+    port: 5190,
+    strictPort: true,
+  },
 })
