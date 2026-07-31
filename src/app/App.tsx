@@ -2064,6 +2064,8 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
   onSelectFaculty: (name: string) => void;
   onBack: () => void;
 }) {
+  const { allUsers, registrations } = useAppData();
+  const lecturers = allUsers.filter(u => u.role === "lecturer");
   const [newName, setNewName] = useState("");
   const [newDepts, setNewDepts] = useState("");
   const [newDean, setNewDean] = useState("");
@@ -2071,6 +2073,36 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDepts, setEditDepts] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [semester, setSemester] = useState<number>(1);
+
+  function courseStatus(c: any): string {
+    const prefix = (c.code || "").toUpperCase().split(/[\s/0-9]/)[0];
+    const SERVICE = new Set(["GST", "GNS", "ENT", "FRE", "FRN", "LSE", "GSS"]);
+    if (SERVICE.has(prefix)) return "R";
+    if (c.code.includes("/")) return "E";
+    return "C";
+  }
+
+  const STATUS_META: Record<string, { label: string; cls: string }> = {
+    C: { label: "Compulsory", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    E: { label: "Elective", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+    R: { label: "Required", cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  };
+
+  function StatusBadge({ status }: { status: string }) {
+    const meta = STATUS_META[status];
+    return (
+      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${meta.cls}`}>
+        <span className="font-mono">{status}</span>
+        {meta.label}
+      </span>
+    );
+  }
+
+  function initials(name: string): string {
+    return name.split(" ").filter(Boolean).map(n => n[0]).join("").slice(0, 2).toUpperCase() || "—";
+  }
 
   function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -2082,6 +2114,7 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
     try {
       createFaculty(name, depts, newDean.trim() || undefined);
       setNewName(""); setNewDepts(""); setNewDean("");
+      setExpanded(name);
     } catch (err: any) {
       setError(err.message);
     }
@@ -2101,6 +2134,27 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
     setEditingId(null);
   }
 
+  function enrolledCount(courseId: string): number {
+    return registrations.filter(r => r.courseId === courseId && r.status === "approved").length;
+  }
+
+  const semesterTabs = (
+    <div className="flex gap-1.5 p-1 bg-muted/50 border border-border rounded-xl w-fit max-w-full">
+      {[1, 2].map(s => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => setSemester(s)}
+          className={`inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            semester === s ? "bg-accent text-white shadow-sm" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {s === 1 ? "First Semester" : "Second Semester"}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -2110,6 +2164,12 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
         </button>
       </div>
       <SectionHeader title="Manage Faculties" />
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          Each faculty is a compartment organised by department — showing every course with its code, level, semester, units and allocated lecturer.
+        </p>
+        {semesterTabs}
+      </div>
       <form onSubmit={handleCreate} className="bg-card border border-border rounded-lg p-4 space-y-3">
         <h3 className="text-sm font-semibold text-foreground">Add New Faculty</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2134,12 +2194,51 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
           <Plus className="w-3.5 h-3.5 inline mr-1" /> Add Faculty
         </button>
       </form>
-      <div className="space-y-3">
+
+      <div className="space-y-4">
         {allFaculties.map(f => {
           const fc = grouped[f.name] || [];
           const stored = faculties.find(sf => sf.name === f.name);
+          const deptLecturers = lecturers.filter(l => f.departments.includes(l.department || "") || l.faculty === f.name);
+          const totalUnits = fc.reduce((a, c) => a + (c.units || 0), 0);
+          const isOpen = expanded === f.name;
+          const deptsWithCourses = f.departments.filter(d => fc.some(c => c.department === d));
+
           return (
-            <div key={f.name} className="bg-card rounded-lg border border-border overflow-hidden">
+            <div key={f.name} className="bg-card rounded-lg border border-border overflow-hidden shadow-sm">
+              <div className="px-5 py-4 bg-gradient-to-r from-wine via-wine to-wine-dark text-white flex flex-wrap items-center gap-x-4 gap-y-2">
+                <button type="button" onClick={() => setExpanded(isOpen ? null : f.name)} className="flex items-center gap-2.5 min-w-0 text-left flex-1">
+                  <span className="w-9 h-9 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center flex-shrink-0">
+                    <Building2 className="w-4 h-4 text-gold-light" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="text-sm font-bold font-[Outfit] block truncate">{f.name}</span>
+                    <span className="text-[10px] text-white/70 block">
+                      {f.departments.length} departments · {fc.length} courses · {totalUnits} units · {deptLecturers.length} lecturers
+                    </span>
+                  </span>
+                  {f.isBuiltin && <span className="text-[10px] bg-white/15 border border-white/15 px-1.5 py-0.5 rounded font-semibold flex-shrink-0">System</span>}
+                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button onClick={() => onSelectFaculty(f.name)}
+                    className="text-xs border border-white/25 bg-white/10 px-2.5 py-1 rounded-lg hover:bg-white/20 transition-colors">
+                    View in Course Management
+                  </button>
+                  {!f.isBuiltin && stored && (
+                    <>
+                      <button onClick={() => startEdit(stored)}
+                        className="flex items-center gap-1 text-xs border border-white/25 bg-white/10 px-2.5 py-1 rounded-lg hover:bg-white/20 transition-colors">
+                        <Edit2 className="w-3 h-3" /> Edit
+                      </button>
+                      <button onClick={() => { if (confirm(`Delete "${f.name}"?`)) removeFaculty(stored.id); }}
+                        className="flex items-center gap-1 text-xs text-red-100 border border-red-300/40 bg-red-500/20 px-2.5 py-1 rounded-lg hover:bg-red-500/40 transition-colors">
+                        <Trash2 className="w-3 h-3" /> Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
               {editingId === stored?.id ? (
                 <div className="p-4 space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2163,44 +2262,99 @@ function FacultyManager({ allFaculties, grouped, faculties, createFaculty, editF
                 </div>
               ) : (
                 <>
-                  <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 bg-accent/10 rounded-lg flex items-center justify-center">
-                        <Building2 className="w-4 h-4 text-accent" />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-semibold text-foreground">{f.name}</h3>
-                        <p className="text-xs text-muted-foreground">{f.departments.length} departments · {fc.length} courses</p>
-                      </div>
-                      {f.isBuiltin && <span className="text-[10px] bg-muted/50 text-muted-foreground px-1.5 py-0.5 rounded font-semibold">System</span>}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => onSelectFaculty(f.name)}
-                        className="text-xs border border-border px-2.5 py-1 rounded-lg hover:bg-muted/50 transition-colors">
-                        View Courses
-                      </button>
-                      {!f.isBuiltin && stored && (
-                        <>
-                          <button onClick={() => startEdit(stored)}
-                            className="flex items-center gap-1 text-xs border border-border px-2.5 py-1 rounded-lg hover:bg-muted/50 transition-colors">
-                            <Edit2 className="w-3 h-3" /> Edit
-                          </button>
-                          <button onClick={() => { if (confirm(`Delete "${f.name}"?`)) removeFaculty(stored.id); }}
-                            className="flex items-center gap-1 text-xs text-red-600 border border-red-200 px-2.5 py-1 rounded-lg hover:bg-red-50 transition-colors">
-                            <Trash2 className="w-3 h-3" /> Delete
-                          </button>
-                        </>
+                  <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+                    <p className="text-xs font-semibold text-muted-foreground">Departments & Courses</p>
+                    <button type="button" onClick={() => setExpanded(isOpen ? null : f.name)}
+                      className="text-xs text-accent font-semibold inline-flex items-center gap-1 hover:underline">
+                      {isOpen ? "Collapse" : "Expand"} <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                    </button>
+                  </div>
+
+                  {isOpen ? (
+                    <div className="p-4 sm:p-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                      {deptsWithCourses.length === 0 && (
+                        <div className="col-span-full text-center py-8">
+                          <BookOpen className="w-8 h-8 text-muted-foreground/40 mx-auto" />
+                          <p className="text-sm font-semibold text-foreground mt-3">No courses in this faculty yet</p>
+                          <p className="text-xs text-muted-foreground mt-1">Courses will appear here once they are created under one of its departments.</p>
+                        </div>
                       )}
+                      {deptsWithCourses.map(dept => {
+                        const dc = fc.filter(c => c.department === dept);
+                        const deptLecturers = lecturers.filter(l => l.department === dept);
+                        const deptUnits = dc.reduce((a, c) => a + (c.units || 0), 0);
+                        const levels = [...new Set(dc.map(c => c.level))].sort((a, b) => Number(a) - Number(b));
+                        return (
+                          <div key={dept} className="rounded-xl border border-border overflow-hidden bg-muted/10 flex flex-col">
+                            <div className="px-4 py-3 bg-muted/40 border-b border-border flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold text-foreground truncate">{dept}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">
+                                  {dc.length} courses · {deptUnits} credit units · {deptLecturers.length} lecturers
+                                </p>
+                              </div>
+                              <span className="text-[10px] bg-accent/10 text-accent px-2 py-0.5 rounded font-bold whitespace-nowrap">{dc.length}</span>
+                            </div>
+                            <div className="flex-1">
+                              {levels.map((lv, li) => {
+                                const lc = dc.filter(c => c.level === lv && c.semester === semester);
+                                if (lc.length === 0) return null;
+                                return (
+                                  <div key={lv}>
+                                    {li > 0 && <div className="mx-4 border-t border-dashed border-border/70" />}
+                                    <div className="px-4 py-2.5">
+                                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5 flex items-center gap-1">
+                                        <GraduationCap className="w-3 h-3 text-accent" /> Level {lv} · {semester === 1 ? "First" : "Second"} Semester
+                                      </p>
+                                      <div className="divide-y divide-border rounded-lg border border-border bg-card overflow-hidden">
+                                        {lc.map(c => {
+                                          const lec = lecturers.find(l => l.id === c.lecturerId) || lecturers.find(l => l.name === c.lecturer);
+                                          const enrolled = enrolledCount(c.id);
+                                          return (
+                                            <div key={c.id} className="px-3 py-2 flex items-center gap-3 hover:bg-muted/20 transition-colors">
+                                              <span className="w-16 flex-shrink-0 font-mono text-[11px] font-bold text-wine">{c.code}</span>
+                                              <div className="min-w-0 flex-1">
+                                                <p className="text-xs text-foreground font-medium truncate">{c.title}</p>
+                                                <p className="text-[10px] text-muted-foreground mt-0.5">{c.units} credit unit{c.units !== 1 ? "s" : ""}</p>
+                                              </div>
+                                              <span className="hidden md:inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent/10 text-accent">
+                                                <Users className="w-3 h-3" /> {enrolled}
+                                              </span>
+                                              <StatusBadge status={courseStatus(c)} />
+                                              <div className="hidden lg:flex items-center gap-1.5 min-w-0 w-36">
+                                                <span className={`w-5 h-5 rounded-full border flex items-center justify-center text-[8px] font-bold flex-shrink-0 ${lec ? "bg-lecturer/10 border-lecturer/20 text-lecturer" : "bg-muted/50 border-border text-muted-foreground"}`}>
+                                                  {lec ? initials(lec.name) : "—"}
+                                                </span>
+                                                <span className="text-[11px] text-muted-foreground truncate">{c.lecturer}</span>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              {levels.every(lv => !dc.some(c => c.level === lv && c.semester === semester)) && (
+                                <p className="text-[11px] text-muted-foreground text-center py-6 px-4">
+                                  No courses for {semester === 1 ? "First" : "Second"} Semester in this department.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
-                  <div className="px-5 py-3">
-                    <p className="text-xs font-semibold text-muted-foreground mb-2">Departments</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {f.departments.map(d => (
-                        <span key={d} className="text-xs bg-muted/50 text-muted-foreground px-2 py-1 rounded">{d}</span>
-                      ))}
+                  ) : (
+                    <div className="px-5 py-3">
+                      <p className="text-xs font-semibold text-muted-foreground mb-2">Departments</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {f.departments.map(d => (
+                          <span key={d} className="text-xs bg-muted/50 text-muted-foreground px-2 py-1 rounded">{d}</span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </>
               )}
             </div>
